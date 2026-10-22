@@ -82,7 +82,7 @@ public class Config extends ConfigYamlData {
 			ticksPerFlag.set(20L * secondsPerFlag);
 		}
 
-		deletionRecovery.set(Math.max(0, getLong("deletion.recovery-time")));
+		deletionRecovery.set(Math.max(0, readRecoveryTime()));
 		deletionChunkCount.set(Math.max(1, getInt("deletion.expensive-checks-between-recovery")));
 		millisBetweenCycles.set(TimeUnit.HOURS.toMillis(Math.max(0, getInt("deletion.hours-between-cycles"))));
 		rememberCycleDelay.set(getBoolean("deletion.remember-next-cycle-time"));
@@ -93,6 +93,19 @@ public class Config extends ConfigYamlData {
 		cacheBatchDelay = Math.max(0L, getLong("cache.batch-delay"));
 		cacheMaxSize = Math.max(50_000, getInt("cache.max-cache-size"));
 
+	}
+
+	private long readRecoveryTime() {
+		// Configs generated before 3.0.0 shipped the key as deletion-recovery-time, which was never read.
+		// Prefer the real key, but honour the legacy one so those configs get the delay they ask for.
+		if (raw().isSet("deletion.recovery-time")) {
+			return getLong("deletion.recovery-time");
+		}
+		if (raw().isSet("deletion.deletion-recovery-time")) {
+			return getLong("deletion.deletion-recovery-time");
+		}
+		// Fall through to the bundled default.
+		return getLong("deletion.recovery-time");
 	}
 
 	public void reconsiderWorldValidity() {
