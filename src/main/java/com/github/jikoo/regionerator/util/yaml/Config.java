@@ -38,6 +38,8 @@ public class Config extends ConfigYamlData {
 	public static final long FLAG_ETERNAL = Long.MAX_VALUE - 1;
 	/** Constant representing a failure to load data. */
 	public static final long FLAG_OH_NO = Long.MAX_VALUE - 2;
+	/** Constant representing a chunk that has been generated but not visited. Replaced by the first visit. */
+	public static final long FLAG_GENERATED = Long.MAX_VALUE;
 
 	private final Object lock = new Object();
 	private DebugLevel debugLevel;
@@ -51,6 +53,8 @@ public class Config extends ConfigYamlData {
 	private final AtomicBoolean deleteFreshChunks = new AtomicBoolean();
 	private final AtomicBoolean deleteWholeRegionsOnly = new AtomicBoolean();
 	private final AtomicBoolean allowUnsafeRegionAccess = new AtomicBoolean();
+	private final AtomicBoolean pruneAfterCycle = new AtomicBoolean();
+	private final AtomicLong deletionRecordRetention = new AtomicLong();
 	private long cacheExpirationFrequency;
 	private long cacheRetention;
 	private int cacheBatchMax;
@@ -90,6 +94,8 @@ public class Config extends ConfigYamlData {
 		rememberCycleDelay.set(getBoolean("deletion.remember-next-cycle-time"));
 		deleteWholeRegionsOnly.set(getBoolean("deletion.whole-regions-only"));
 		allowUnsafeRegionAccess.set(getBoolean("deletion.allow-unsafe-region-access"));
+		pruneAfterCycle.set(getBoolean("database.prune-after-cycle"));
+		deletionRecordRetention.set(TimeUnit.DAYS.toMillis(Math.max(0, getInt("database.keep-deletion-records-days"))));
 
 		cacheExpirationFrequency = TimeUnit.MILLISECONDS.convert(Math.max(0, getInt("cache.minimum-expiration-frequency")), TimeUnit.SECONDS);
 		cacheRetention = TimeUnit.MILLISECONDS.convert(Math.max(1, getInt("cache.retention")), TimeUnit.MINUTES);
@@ -177,6 +183,14 @@ public class Config extends ConfigYamlData {
 		return allowUnsafeRegionAccess.get();
 	}
 
+	public boolean isPruneAfterCycle() {
+		return pruneAfterCycle.get();
+	}
+
+	public long getDeletionRecordRetentionMillis() {
+		return deletionRecordRetention.get();
+	}
+
 	public boolean isDeleteFreshChunks(@NotNull World world) {
 		return isDeleteFreshChunks(world.getName());
 	}
@@ -200,7 +214,7 @@ public class Config extends ConfigYamlData {
 	}
 
 	public long getFlagGenerated(@NotNull String worldName) {
-		return isDeleteFreshChunks(worldName) ? getFlagVisit(worldName) : Long.MAX_VALUE;
+		return isDeleteFreshChunks(worldName) ? getFlagVisit(worldName) : FLAG_GENERATED;
 	}
 
 	public long getFlagVisit(@NotNull World world) {

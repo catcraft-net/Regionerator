@@ -42,6 +42,11 @@ final class DirectRegionFileAccess extends RegionFileAccess {
 	}
 
 	@Override
+	boolean canDetectUse() {
+		return false;
+	}
+
+	@Override
 	boolean isRegionInUse(int regionX, int regionZ) {
 		return false;
 	}

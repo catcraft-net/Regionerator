@@ -11,42 +11,56 @@
 package com.github.jikoo.regionerator.database;
 
 import com.github.jikoo.regionerator.ChunkFlagger;
-import com.github.jikoo.regionerator.Regionerator;
 import com.github.jikoo.regionerator.util.yaml.Config;
 import org.jetbrains.annotations.NotNull;
 
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collection;
+import java.util.logging.Logger;
 
 /**
  * Adapter for modern SQLite.
  */
 public class SQLiteAdapter extends SQLeadenAdapter {
 
-	SQLiteAdapter(@NotNull Regionerator plugin, @NotNull Connection database) throws SQLException {
-		super(plugin, database);
+	/**
+	 * Records a removed flag's last value, and when it was removed, as a deletion record.
+	 *
+	 * @see DatabaseAdapter#DELETION_RECORD_SUFFIX
+	 */
+	private static final String CREATE_DELETION_RECORD_TRIGGER = """
+			CREATE TRIGGER chunkdataold
+			AFTER DELETE ON chunkdata
+			WHEN OLD.time NOT NULL AND substr(OLD.chunk_id, -4) <> '_old'
+			BEGIN
+			INSERT INTO chunkdata(chunk_id,time,deleted) VALUES (OLD.chunk_id || '_old', OLD.time, CAST(strftime('%s','now') AS INTEGER) * 1000)
+			ON CONFLICT(chunk_id) DO UPDATE SET time=excluded.time, deleted=excluded.deleted;
+			END""";
+	private static final String DROP_DELETION_RECORD_TRIGGER = "DROP TRIGGER IF EXISTS chunkdataold";
 
-		// Set up triggers
-		try (Statement st = database.createStatement()) {
-			st.executeUpdate(
-							"""
-											CREATE TRIGGER IF NOT EXISTS chunkdataold
-											AFTER DELETE ON chunkdata
-											WHEN OLD.time NOT NULL AND OLD.chunk_id NOT LIKE '%_old'
-											BEGIN
-											INSERT INTO chunkdata(chunk_id,time) VALUES (OLD.chunk_id || '_old',OLD.time) ON CONFLICT(chunk_id) DO UPDATE SET `time`=OLD.time;
-											END""");
-			database.commit();
+	SQLiteAdapter(@NotNull Logger logger, @NotNull Path file) throws SQLException {
+		super(logger, file);
+	}
+
+	@Override
+	void setUp(@NotNull Connection connection) throws SQLException {
+		super.setUp(connection);
+
+		// Set up triggers, replacing the trigger from earlier versions, which did not record when.
+		try (Statement st = connection.createStatement()) {
+			st.executeUpdate(DROP_DELETION_RECORD_TRIGGER);
+			st.executeUpdate(CREATE_DELETION_RECORD_TRIGGER);
 		} catch (SQLException e) {
-			plugin.getLogger().severe("An exception setting up database trigger!");
+			logger.severe("An exception setting up database trigger!");
 			try {
-				DatabaseMetaData metaData = database.getMetaData();
-				plugin.getLogger().warning(String.format("SQLite driver: %s %s", metaData.getDriverName(), metaData.getDriverVersion()));
-				plugin.getLogger().warning(String.format("SQLite database: %s %s", metaData.getDatabaseProductName(), metaData.getDatabaseProductVersion()));
+				DatabaseMetaData metaData = connection.getMetaData();
+				logger.warning(String.format("SQLite driver: %s %s", metaData.getDriverName(), metaData.getDriverVersion()));
+				logger.warning(String.format("SQLite database: %s %s", metaData.getDatabaseProductName(), metaData.getDatabaseProductVersion()));
 			} catch (SQLException ignored) {
 			}
 			throw e;
@@ -54,9 +68,22 @@ public class SQLiteAdapter extends SQLeadenAdapter {
 	}
 
 	@Override
+	void suspendDeletionRecords(@NotNull Statement statement) throws SQLException {
+		// Pruned flags were not deleted chunks; don't record them. Restored in the same transaction.
+		statement.executeUpdate(DROP_DELETION_RECORD_TRIGGER);
+	}
+
+	@Override
+	void resumeDeletionRecords(@NotNull Statement statement) throws SQLException {
+		statement.executeUpdate(CREATE_DELETION_RECORD_TRIGGER);
+	}
+
+	@Override
 	public void update(@NotNull Collection<ChunkFlagger.FlagData> flags) throws SQLException {
-		synchronized (database) {
-			try (PreparedStatement upsert = database.prepareStatement("INSERT INTO chunkdata(chunk_id,time) VALUES (?,?) ON CONFLICT(chunk_id) DO UPDATE SET time=excluded.time WHERE excluded.time>chunkdata.time");
+		synchronized (lock) {
+			recordWrites(flags.stream().map(ChunkFlagger.FlagData::getChunkId).toList());
+			try (PreparedStatement upsert = database.prepareStatement("INSERT INTO chunkdata(chunk_id,time) VALUES (?,?) ON CONFLICT(chunk_id) DO UPDATE SET time=excluded.time WHERE "
+					+ replaceCondition("excluded.time", "chunkdata.time"));
 				PreparedStatement delete = database.prepareStatement("DELETE FROM chunkdata WHERE chunk_id=?")) {
 				for (ChunkFlagger.FlagData data : flags) {
 					if (data.getLastVisit() == Config.FLAG_DEFAULT) {

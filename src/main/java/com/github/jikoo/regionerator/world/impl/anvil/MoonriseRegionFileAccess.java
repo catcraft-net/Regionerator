@@ -128,6 +128,11 @@ final class MoonriseRegionFileAccess extends RegionFileAccess {
 	}
 
 	@Override
+	boolean canDetectUse() {
+		return true;
+	}
+
+	@Override
 	boolean isRegionInUse(int regionX, int regionZ) throws IOException {
 		for (Object storage : storages) {
 			synchronized (storage) {

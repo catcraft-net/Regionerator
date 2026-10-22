@@ -86,6 +86,15 @@ public class DeletionRunnable extends BukkitRunnable {
 		// Release world reference.
 		world = null;
 		plugin.getLogger().info("Deletion cycle complete for " + getRunStats());
+
+		// Deletion removes flags; clear out flags that no longer have any effect.
+		if (plugin.config().isPruneAfterCycle() && !isCancelled()) {
+			try {
+				plugin.getServer().getScheduler().runTask(plugin, () -> plugin.getFlagMaintenance().prune(null));
+			} catch (IllegalPluginAccessException e) {
+				// Plugin disabling.
+			}
+		}
 		nextRun.set(System.currentTimeMillis() + plugin.config().getCycleDelayMillis());
 
 		// If configured to remember cycle delays across restarts, do post-run callback on the main thread.

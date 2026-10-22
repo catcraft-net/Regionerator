@@ -10,7 +10,11 @@
 
 package com.github.jikoo.regionerator;
 
+import com.github.jikoo.regionerator.database.CompactResult;
 import com.github.jikoo.regionerator.database.DatabaseAdapter;
+import com.github.jikoo.regionerator.database.FlagFilter;
+import com.github.jikoo.regionerator.database.Pacer;
+import com.github.jikoo.regionerator.database.PruneResult;
 import com.github.jikoo.regionerator.util.BatchExpirationLoadingCache;
 import com.github.jikoo.regionerator.util.yaml.Config;
 import org.bukkit.Bukkit;
@@ -28,6 +32,7 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.logging.Level;
 import java.util.regex.Pattern;
 
@@ -265,6 +270,69 @@ public class ChunkFlagger {
 	}
 
 	/**
+	 * Removes stored flags that no longer have any effect.
+	 *
+	 * @param filter decides which ordinary flags can be removed
+	 * @param deletionRecordCutoff deletion records made before this time are removed
+	 * @param pacer pauses between batches and is checked before each batch to stop early
+	 * @return the outcome
+	 * @throws Exception if the database cannot be read or written
+	 * @see DatabaseAdapter#prune(FlagFilter, long, Pacer)
+	 */
+	@NotNull PruneResult prune(@NotNull FlagFilter filter, long deletionRecordCutoff, @NotNull Pacer pacer)
+			throws Exception {
+		return adapter.prune(filter, deletionRecordCutoff, pacer);
+	}
+
+	/**
+	 * Rewrites the database file without unused space.
+	 *
+	 * @param cancelled checked between steps to stop early
+	 * @return the outcome, or {@code null} if the database does not support compacting
+	 * @throws Exception if the database cannot be compacted
+	 * @see DatabaseAdapter#compact(BooleanSupplier)
+	 */
+	@Nullable CompactResult compact(@NotNull BooleanSupplier cancelled) throws Exception {
+		return adapter.compact(cancelled);
+	}
+
+	/**
+	 * Interrupts a long-running database maintenance step.
+	 */
+	void interruptMaintenance() {
+		adapter.interruptMaintenance();
+	}
+
+	/**
+	 * Gets whether a flag is held in memory. Held flags are written back when their value changes.
+	 *
+	 * @param chunkId the flag's chunk identifier
+	 * @return true if the flag is held in memory
+	 */
+	boolean isHeld(@NotNull String chunkId) {
+		return flagCache.contains(chunkId);
+	}
+
+	/**
+	 * Gets the number of bytes in the database file that hold no data.
+	 *
+	 * @return the unused bytes
+	 * @throws Exception if the database cannot be read
+	 */
+	long getFreeBytes() throws Exception {
+		return adapter.getFreeBytes();
+	}
+
+	/**
+	 * Gets the database file.
+	 *
+	 * @return the database file
+	 */
+	@NotNull File getDatabaseFile() {
+		return new File(plugin.getDataFolder(), "data.db");
+	}
+
+	/**
 	 * Force a save of all flags and close the connection.
 	 */
 	void shutdown() {
@@ -301,7 +369,7 @@ public class ChunkFlagger {
 	public CompletableFuture<FlagData> getChunkFlag(@NotNull World world, int chunkX, int chunkZ) {
 		return this.flagCache.get(getFlagDbId(world.getName(), chunkX, chunkZ)).thenApply(flagData -> {
 			// Ensure changing config value allows deleting fresh chunks.
-			if (flagData.getLastVisit() == Long.MAX_VALUE && plugin.config().isDeleteFreshChunks(world)) {
+			if (flagData.getLastVisit() == Config.FLAG_GENERATED && plugin.config().isDeleteFreshChunks(world)) {
 				flagData.setLastVisit(Config.FLAG_DEFAULT);
 			}
 			return flagData;
@@ -317,7 +385,7 @@ public class ChunkFlagger {
 	 * @return a {@link CompletableFuture<FlagData>}
 	 */
 	public @NotNull CompletableFuture<FlagData> getChunkFlagOnDelete(@NotNull World world, int chunkX, int chunkZ) {
-		return this.flagCache.get(getFlagDbId(world.getName(), chunkX, chunkZ) + "_old");
+		return this.flagCache.get(getFlagDbId(world.getName(), chunkX, chunkZ) + DatabaseAdapter.DELETION_RECORD_SUFFIX);
 	}
 
 	 /**
@@ -393,7 +461,7 @@ public class ChunkFlagger {
 				return;
 			}
 
-			if (oldValue == Long.MAX_VALUE) {
+			if (oldValue == Config.FLAG_GENERATED) {
 				// Only set fresh generated flag if current value is default.
 				if (this.lastVisit.compareAndSet(Config.FLAG_DEFAULT, oldValue)) {
 					this.dirty.set(true);

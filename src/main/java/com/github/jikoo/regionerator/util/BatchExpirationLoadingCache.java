@@ -141,6 +141,17 @@ public class BatchExpirationLoadingCache<K, V> {
 	}
 
 	/**
+	 * Gets whether a value is cached for the specified key. Unlike {@link #getIfPresent(Object)}, this does not count
+	 * as use of the value.
+	 *
+	 * @param key the key
+	 * @return true if a value is cached
+	 */
+	public boolean contains(@NotNull K key) {
+		return internal.containsKey(key);
+	}
+
+	/**
 	 * Gets a value for the specified key or computes it and adds it to the cache if not present.
 	 *
 	 * @param key the key

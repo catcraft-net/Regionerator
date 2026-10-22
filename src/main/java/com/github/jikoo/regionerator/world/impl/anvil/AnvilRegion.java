@@ -24,6 +24,7 @@ import java.nio.IntBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -374,6 +375,33 @@ public class AnvilRegion extends RegionInfo {
 		Preconditions.checkArgument(localChunkX >= 0 && localChunkX < 32 && localChunkZ >= 0 && localChunkZ < 32,
 				"Local chunk coords must be within range 0-31! Received values X: %s, Z: %s", localChunkX, localChunkZ);
 		return new AnvilChunk(localChunkX, localChunkZ);
+	}
+
+	@Override
+	public boolean hasChunk(int localChunkX, int localChunkZ) {
+		return storedChunkUsage.get(RegionFile.packIndex(localChunkX, localChunkZ)) != RegionFile.CHUNK_NOT_PRESENT;
+	}
+
+	@Override
+	public @NotNull BitSet getAbsentChunks(@NotNull BitSet localChunks) throws IOException {
+		BitSet absent = new BitSet(CHUNK_COUNT);
+		if (!access.canDetectUse()) {
+			return absent;
+		}
+		access.runExclusive(regionX, regionZ, () -> {
+			if (!read()) {
+				return false;
+			}
+			for (int index = localChunks.nextSetBit(0); index >= 0 && index < CHUNK_COUNT; index = localChunks.nextSetBit(index + 1)) {
+				int localX = RegionFile.unpackLocalX(index);
+				int localZ = RegionFile.unpackLocalZ(index);
+				if (!hasChunk(localX, localZ) && !access.isChunkBusy(getLowestChunkX() + localX, getLowestChunkZ() + localZ)) {
+					absent.set(index);
+				}
+			}
+			return true;
+		});
+		return absent;
 	}
 
 	@Override

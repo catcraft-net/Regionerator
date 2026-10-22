@@ -43,6 +43,7 @@ deletion:
   start-paused: false
   # Recovery time in milliseconds between expensive operations.
   # Recovery time is always waited between region checks.
+  # Flag database pruning also waits this long between regions and between batches of flags.
   recovery-time: 250
   # Number of chunks with expensive checks between recovery delays.
   # Values >= 1024 cause no additional recovery time.
@@ -59,6 +60,17 @@ deletion:
   # so both never write the same file at once. Other server software offers no way to do that,
   # so deletion is disabled there unless this is enabled. Enabling it risks corrupted chunks.
   allow-unsafe-region-access: false
+
+# The flag database records when chunks were last visited.
+database:
+  # After each deletion cycle, remove flags that no longer have any effect: expired visits
+  # and flags for chunks that no longer exist. Permanent flags are always kept.
+  # Pruning waits deletion.recovery-time between regions and between batches of flags.
+  # "/regionerator prune" runs it immediately; "/regionerator compact" shrinks the file.
+  prune-after-cycle: true
+  # When a chunk is deleted, the time it was last visited is kept for /regionerator check.
+  # Days to keep that record after the chunk is deleted.
+  keep-deletion-records-days: 90
 
 # Worlds the plugin is able to delete regions in
 worlds:
