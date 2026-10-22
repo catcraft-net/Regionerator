@@ -46,6 +46,8 @@ public class SQLeadenAdapter implements DatabaseAdapter {
 	private static final int PRUNE_BATCH_SIZE = 1_000;
 	/** Pause between pruning batches so other database use is not held up. */
 	private static final long PRUNE_PAUSE_MILLIS = 5;
+	/** Size in bytes the write-ahead log is truncated to after a checkpoint. */
+	private static final long JOURNAL_SIZE_LIMIT = 16L * 1024 * 1024;
 	/** Flags copied per lock while bringing a compacted database up to date. */
 	private static final int COMPACT_COPY_BATCH_SIZE = 500;
 	/** Most flags written during compacting that may be copied in the final step, while the lock is held. */
@@ -108,6 +110,8 @@ public class SQLeadenAdapter implements DatabaseAdapter {
 		try (Statement st = connection.createStatement()) {
 			// Write-ahead logging lets compacting read a consistent snapshot while flags are still written.
 			st.execute("PRAGMA journal_mode=WAL");
+			// The log is reused rather than shrunk; return its space after large batches of writes, such as pruning.
+			st.execute("PRAGMA journal_size_limit=" + JOURNAL_SIZE_LIMIT);
 			st.executeUpdate("CREATE TABLE IF NOT EXISTS `chunkdata`(`chunk_id` TEXT NOT NULL UNIQUE, `time` BIGINT NOT NULL)");
 			// When a deletion record was made, so records can be pruned by age. Null for ordinary flags and for records
 			// made before this was stored.
