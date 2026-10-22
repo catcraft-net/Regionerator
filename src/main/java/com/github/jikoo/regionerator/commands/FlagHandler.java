@@ -143,29 +143,43 @@ public class FlagHandler {
 			return null;
 		}
 
-		LocalSession session = WorldEdit.getInstance().getSessionManager().getIfPresent(BukkitAdapter.adapt(player));
+		return WorldEditSelection.getSelectedChunks(player);
+	}
 
-		if (session == null || session.getSelectionWorld() == null) {
-			player.sendMessage("You must select an area with WorldEdit to (un)flag!");
-			return null;
+	/**
+	 * WorldEdit access, kept in its own class so FlagHandler loads when WorldEdit is not installed.
+	 * Verifying a method that passes WorldEdit types between WorldEdit calls loads those types.
+	 */
+	private static final class WorldEditSelection {
+
+		private static @Nullable Set<ChunkPosition> getSelectedChunks(@NotNull Player player) {
+			LocalSession session = WorldEdit.getInstance().getSessionManager().getIfPresent(BukkitAdapter.adapt(player));
+
+			if (session == null || session.getSelectionWorld() == null) {
+				player.sendMessage("You must select an area with WorldEdit to (un)flag!");
+				return null;
+			}
+
+			Region selection = null;
+			try {
+				selection = session.getSelection(session.getSelectionWorld());
+			} catch (Exception ignored) {
+				// If there was an exception getting their selection, they probably don't have one.
+			}
+
+			if (selection == null) {
+				player.sendMessage("You must select an area with WorldEdit to (un)flag!");
+				return null;
+			}
+
+			String worldName = session.getSelectionWorld().getName();
+			return selection.getChunks().stream()
+					.map(vector -> new ChunkPosition(worldName, vector.x(), vector.z()))
+					.collect(Collectors.toUnmodifiableSet());
 		}
 
-		Region selection = null;
-		try {
-			selection = session.getSelection(session.getSelectionWorld());
-		} catch (Exception ignored) {
-			// If there was an exception getting their selection, they probably don't have one.
-		}
+		private WorldEditSelection() {}
 
-		if (selection == null) {
-			player.sendMessage("You must select an area with WorldEdit to (un)flag!");
-			return null;
-		}
-
-		String worldName = session.getSelectionWorld().getName();
-		return selection.getChunks().stream()
-				.map(vector -> new ChunkPosition(worldName, vector.x(), vector.z()))
-				.collect(Collectors.toUnmodifiableSet());
 	}
 
 	private record ChunkPosition(String name, int chunkX, int chunkZ) {}
