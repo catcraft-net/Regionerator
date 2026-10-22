@@ -10,6 +10,7 @@
 
 package com.github.jikoo.regionerator;
 
+import com.github.jikoo.regionerator.util.ResetArea;
 import com.github.jikoo.regionerator.world.ChunkInfo;
 import com.github.jikoo.regionerator.world.RegionInfo;
 import com.github.jikoo.regionerator.world.WorldInfo;
@@ -212,6 +213,7 @@ public class DeletionRunnable extends BukkitRunnable {
 			}
 			plugin.debug(DebugLevel.HIGH, () ->
 					String.format("Not all chunks are delete-eligible (%s) - removing unnecessary chunks", chunks.size()));
+			keepLargeAreas(region, chunks);
 			// If entire region is not being deleted, filter out chunks that are already orphaned or freshly generated
 			chunks.removeIf(this::isPartialDeletionIgnored);
 		} else if (!plugin.config().isDeleteFreshChunks(region.getWorld())
@@ -228,6 +230,109 @@ public class DeletionRunnable extends BukkitRunnable {
 		}
 
 		return chunks;
+	}
+
+	/**
+	 * Removes eligible chunks that are not part of a large enough square of empty chunks.
+	 *
+	 * <p>Eligible chunks count as empty, including absent ones: their terrain will be newly generated. Freshly generated
+	 * chunks do not, since players may have built in them while visits could not replace the generated marker.
+	 * Squares may reach into neighbouring regions, so a large empty area crossing a region border counts as one area.
+	 */
+	private void keepLargeAreas(@NotNull RegionInfo region, @NotNull List<ChunkInfo> chunks) {
+		int size = plugin.config().getMinResetArea();
+		if (size <= 1) {
+			return;
+		}
+
+		int width = region.getChunksPerAxis();
+		ResetArea area = new ResetArea(width, size);
+		for (ChunkInfo chunk : chunks) {
+			if (!isFreshlyGenerated(chunk)) {
+				area.setEmpty(chunk.getLocalChunkX(), chunk.getLocalChunkZ(), true);
+			}
+		}
+
+		// Only look into neighbouring regions on the sides where an eligible chunk is not covered yet.
+		int margin = area.getMargin();
+		boolean west = false;
+		boolean east = false;
+		boolean north = false;
+		boolean south = false;
+		for (ChunkInfo chunk : chunks) {
+			int x = chunk.getLocalChunkX();
+			int z = chunk.getLocalChunkZ();
+			if (area.isCovered(x, z) || chunk.isOrphaned() || isFreshlyGenerated(chunk)) {
+				continue;
+			}
+			west |= x < margin;
+			east |= x >= width - margin;
+			north |= z < margin;
+			south |= z >= width - margin;
+		}
+		for (int dX = -1; dX <= 1; ++dX) {
+			for (int dZ = -1; dZ <= 1; ++dZ) {
+				boolean needed = (dX == 0 || (dX < 0 ? west : east)) && (dZ == 0 || (dZ < 0 ? north : south));
+				if ((dX != 0 || dZ != 0) && needed) {
+					markNeighbourEmpty(region, area, dX, dZ);
+				}
+			}
+		}
+
+		int before = chunks.size();
+		chunks.removeIf(chunk -> !area.isCovered(chunk.getLocalChunkX(), chunk.getLocalChunkZ()));
+		region.setResetArea(area);
+		plugin.debug(DebugLevel.HIGH, () -> String.format("Keeping %s eligible chunks outside %sx%s areas",
+				before - chunks.size(), size, size));
+	}
+
+	/**
+	 * Marks the chunks of a neighbouring region that a square around the region could reach as empty if eligible.
+	 * Chunks of a region the server has open or that cannot be read are left as not empty.
+	 */
+	private void markNeighbourEmpty(@NotNull RegionInfo region, @NotNull ResetArea area, int dX, int dZ) {
+		if (isCancelled()) {
+			return;
+		}
+
+		int width = region.getChunksPerAxis();
+		RegionInfo neighbour = region.getWorldInfo().getRegion(
+				Math.floorDiv(region.getLowestChunkX(), width) + dX,
+				Math.floorDiv(region.getLowestChunkZ(), width) + dZ);
+		try {
+			if (neighbour.isInUseByServer() || !neighbour.read()) {
+				return;
+			}
+		} catch (IOException e) {
+			plugin.debug(DebugLevel.MEDIUM, () -> "Unable to read neighbouring region " + neighbour.getIdentifier());
+			return;
+		}
+
+		int margin = area.getMargin();
+		int startX = dX < 0 ? -margin : dX * width;
+		int endX = dX < 0 ? 0 : dX == 0 ? width : width + margin;
+		int startZ = dZ < 0 ? -margin : dZ * width;
+		int endZ = dZ < 0 ? 0 : dZ == 0 ? width : width + margin;
+		for (int z = startZ; z < endZ; ++z) {
+			for (int x = startX; x < endX; ++x) {
+				ChunkInfo chunk = neighbour.getLocalChunk(x - dX * width, z - dZ * width);
+				if (isDeleteEligible(chunk) && !isFreshlyGenerated(chunk)) {
+					area.setEmpty(x, z, true);
+				}
+			}
+		}
+	}
+
+	private boolean isFreshlyGenerated(@NotNull ChunkInfo chunk) {
+		if (plugin.config().isDeleteFreshChunks(chunk.getWorld())) {
+			return false;
+		}
+		try {
+			return chunk.getVisitStatus() == VisitStatus.GENERATED;
+		} catch (RuntimeException e) {
+			// Unknown status; don't let the chunk widen an area.
+			return true;
+		}
 	}
 
 	private boolean isPartialDeletionIgnored(ChunkInfo chunkInfo) {

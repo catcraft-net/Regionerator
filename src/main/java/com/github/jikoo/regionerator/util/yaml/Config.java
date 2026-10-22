@@ -40,6 +40,8 @@ public class Config extends ConfigYamlData {
 	public static final long FLAG_OH_NO = Long.MAX_VALUE - 2;
 	/** Constant representing a chunk that has been generated but not visited. Replaced by the first visit. */
 	public static final long FLAG_GENERATED = Long.MAX_VALUE;
+	/** Largest minimum reset area. Larger squares reach further into neighbouring regions, which costs more checks. */
+	private static final int MAX_MIN_RESET_AREA = 16;
 
 	private final Object lock = new Object();
 	private DebugLevel debugLevel;
@@ -52,6 +54,7 @@ public class Config extends ConfigYamlData {
 	private final AtomicBoolean rememberCycleDelay = new AtomicBoolean();
 	private final AtomicBoolean deleteFreshChunks = new AtomicBoolean();
 	private final AtomicBoolean deleteWholeRegionsOnly = new AtomicBoolean();
+	private final AtomicInteger minResetArea = new AtomicInteger();
 	private final AtomicBoolean allowUnsafeRegionAccess = new AtomicBoolean();
 	private final AtomicBoolean pruneAfterCycle = new AtomicBoolean();
 	private final AtomicLong deletionRecordRetention = new AtomicLong();
@@ -93,6 +96,7 @@ public class Config extends ConfigYamlData {
 		millisBetweenCycles.set(TimeUnit.HOURS.toMillis(Math.max(0, getInt("deletion.hours-between-cycles"))));
 		rememberCycleDelay.set(getBoolean("deletion.remember-next-cycle-time"));
 		deleteWholeRegionsOnly.set(getBoolean("deletion.whole-regions-only"));
+		minResetArea.set(Math.max(0, Math.min(MAX_MIN_RESET_AREA, getInt("deletion.min-reset-area"))));
 		allowUnsafeRegionAccess.set(getBoolean("deletion.allow-unsafe-region-access"));
 		pruneAfterCycle.set(getBoolean("database.prune-after-cycle"));
 		deletionRecordRetention.set(TimeUnit.DAYS.toMillis(Math.max(0, getInt("database.keep-deletion-records-days"))));
@@ -179,6 +183,16 @@ public class Config extends ConfigYamlData {
 		return deleteWholeRegionsOnly.get();
 	}
 
+	/**
+	 * Gets the side length, in chunks, of the square of deletable chunks a chunk must be part of to be deleted on its
+	 * own. 1 or less deletes chunks individually.
+	 *
+	 * @return the minimum reset area's side length in chunks
+	 */
+	public int getMinResetArea() {
+		return minResetArea.get();
+	}
+
 	public boolean isUnsafeRegionAccessAllowed() {
 		return allowUnsafeRegionAccess.get();
 	}
@@ -263,34 +277,6 @@ public class Config extends ConfigYamlData {
 
 	public boolean startPaused() {
 		return getBoolean("deletion.start-paused");
-	}
-
-	public boolean rescueEnabled() {
-		return getBoolean("safe-login.enabled");
-	}
-
-	public boolean rescueIfSafe() {
-		return getBoolean("safe-login.rescue-if-safe");
-	}
-
-	public boolean rescueToTopBlock() {
-		return getBoolean("safe-login.try-top-block");
-	}
-
-	public boolean rescueToRespawn() {
-		return getBoolean("safe-login.try-respawn");
-	}
-
-	public @NotNull World getRescueWorld(@NotNull World current) {
-		String worldName = getString("safe-login.world-override");
-		if (worldName == null) {
-			return current;
-		}
-		World world = Bukkit.getWorld(worldName);
-		if (world == null) {
-			return current;
-		}
-		return world;
 	}
 
 }

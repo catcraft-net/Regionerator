@@ -56,6 +56,12 @@ deletion:
   # Keeping partly-used regions intact avoids newly generated terrain meeting old terrain
   # at chunk borders inside a region, at the cost of freeing less space.
   whole-regions-only: false
+  # When deleting part of a region, only delete chunks that are part of a square of deletable
+  # chunks at least this many chunks wide (e.g. 8 = 128x128 blocks). Lone deletable chunks next
+  # to used areas are kept, so new terrain doesn't meet old terrain right beside players.
+  # Squares may cross into neighbouring regions. Freshly generated chunks don't count towards a
+  # square. 0 or 1 deletes chunks individually; at most 16.
+  min-reset-area: 0
   # On Paper and its forks, Regionerator coordinates its region file edits with the server
   # so both never write the same file at once. Other server software offers no way to do that,
   # so deletion is disabled there unless this is enabled. Enabling it risks corrupted chunks.
@@ -81,18 +87,6 @@ worlds:
     # To disable flagging, set this to 0.
     # days-till-flag-expires must be greater than 0 to be used with delete-new-unvisited-chunks
     days-till-flag-expires: -1
-
-safe-login:
-  # Whether to modify login location if in a deleted chunk.
-  enabled: true
-  # Whether to always rescue players, even if considered safe.
-  rescue-if-safe: false
-  # Prefer the top block at the player's current location?
-  try-top-block: true
-  # After top block, prefer the player's bed/respawn anchor location?
-  try-respawn: true
-  # After respawn location, override player's current world spawn with another.
-  world-override: ""
 
 # Hooks to attempt to check for protections from.
 # If your protection plugin of choice isn't here, ask!
