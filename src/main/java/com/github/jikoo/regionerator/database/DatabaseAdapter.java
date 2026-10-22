@@ -39,10 +39,10 @@ public interface DatabaseAdapter {
 
 		if (metaData.getDatabaseMajorVersion() < 3 || metaData.getDatabaseMajorVersion() == 3 && metaData.getDatabaseMinorVersion() < 24) {
 			// Terrible SQLite
-			return new SQLeadenAdapter(plugin, connection);
+			return new SQLeadenAdapter(plugin.getLogger(), connection);
 		}
 
-		return new SQLiteAdapter(plugin, connection);
+		return new SQLiteAdapter(plugin.getLogger(), connection);
 
 	}
 

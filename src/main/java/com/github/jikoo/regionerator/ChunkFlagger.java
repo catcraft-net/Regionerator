@@ -301,7 +301,7 @@ public class ChunkFlagger {
 	public CompletableFuture<FlagData> getChunkFlag(@NotNull World world, int chunkX, int chunkZ) {
 		return this.flagCache.get(getFlagDbId(world.getName(), chunkX, chunkZ)).thenApply(flagData -> {
 			// Ensure changing config value allows deleting fresh chunks.
-			if (flagData.getLastVisit() == Long.MAX_VALUE && plugin.config().isDeleteFreshChunks(world)) {
+			if (flagData.getLastVisit() == Config.FLAG_GENERATED && plugin.config().isDeleteFreshChunks(world)) {
 				flagData.setLastVisit(Config.FLAG_DEFAULT);
 			}
 			return flagData;
@@ -393,7 +393,7 @@ public class ChunkFlagger {
 				return;
 			}
 
-			if (oldValue == Long.MAX_VALUE) {
+			if (oldValue == Config.FLAG_GENERATED) {
 				// Only set fresh generated flag if current value is default.
 				if (this.lastVisit.compareAndSet(Config.FLAG_DEFAULT, oldValue)) {
 					this.dirty.set(true);

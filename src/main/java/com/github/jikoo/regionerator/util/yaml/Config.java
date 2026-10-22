@@ -38,6 +38,8 @@ public class Config extends ConfigYamlData {
 	public static final long FLAG_ETERNAL = Long.MAX_VALUE - 1;
 	/** Constant representing a failure to load data. */
 	public static final long FLAG_OH_NO = Long.MAX_VALUE - 2;
+	/** Constant representing a chunk that has been generated but not visited. Replaced by the first visit. */
+	public static final long FLAG_GENERATED = Long.MAX_VALUE;
 
 	private final Object lock = new Object();
 	private DebugLevel debugLevel;
@@ -200,7 +202,7 @@ public class Config extends ConfigYamlData {
 	}
 
 	public long getFlagGenerated(@NotNull String worldName) {
-		return isDeleteFreshChunks(worldName) ? getFlagVisit(worldName) : Long.MAX_VALUE;
+		return isDeleteFreshChunks(worldName) ? getFlagVisit(worldName) : FLAG_GENERATED;
 	}
 
 	public long getFlagVisit(@NotNull World world) {

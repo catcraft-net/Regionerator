@@ -11,7 +11,6 @@
 package com.github.jikoo.regionerator.database;
 
 import com.github.jikoo.regionerator.ChunkFlagger;
-import com.github.jikoo.regionerator.Regionerator;
 import com.github.jikoo.regionerator.util.yaml.Config;
 import org.jetbrains.annotations.NotNull;
 
@@ -21,14 +20,15 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collection;
+import java.util.logging.Logger;
 
 /**
  * Adapter for modern SQLite.
  */
 public class SQLiteAdapter extends SQLeadenAdapter {
 
-	SQLiteAdapter(@NotNull Regionerator plugin, @NotNull Connection database) throws SQLException {
-		super(plugin, database);
+	SQLiteAdapter(@NotNull Logger logger, @NotNull Connection database) throws SQLException {
+		super(logger, database);
 
 		// Set up triggers
 		try (Statement st = database.createStatement()) {
@@ -42,11 +42,11 @@ public class SQLiteAdapter extends SQLeadenAdapter {
 											END""");
 			database.commit();
 		} catch (SQLException e) {
-			plugin.getLogger().severe("An exception setting up database trigger!");
+			logger.severe("An exception setting up database trigger!");
 			try {
 				DatabaseMetaData metaData = database.getMetaData();
-				plugin.getLogger().warning(String.format("SQLite driver: %s %s", metaData.getDriverName(), metaData.getDriverVersion()));
-				plugin.getLogger().warning(String.format("SQLite database: %s %s", metaData.getDatabaseProductName(), metaData.getDatabaseProductVersion()));
+				logger.warning(String.format("SQLite driver: %s %s", metaData.getDriverName(), metaData.getDriverVersion()));
+				logger.warning(String.format("SQLite database: %s %s", metaData.getDatabaseProductName(), metaData.getDatabaseProductVersion()));
 			} catch (SQLException ignored) {
 			}
 			throw e;
@@ -56,7 +56,8 @@ public class SQLiteAdapter extends SQLeadenAdapter {
 	@Override
 	public void update(@NotNull Collection<ChunkFlagger.FlagData> flags) throws SQLException {
 		synchronized (database) {
-			try (PreparedStatement upsert = database.prepareStatement("INSERT INTO chunkdata(chunk_id,time) VALUES (?,?) ON CONFLICT(chunk_id) DO UPDATE SET time=excluded.time WHERE excluded.time>chunkdata.time");
+			try (PreparedStatement upsert = database.prepareStatement("INSERT INTO chunkdata(chunk_id,time) VALUES (?,?) ON CONFLICT(chunk_id) DO UPDATE SET time=excluded.time WHERE "
+					+ replaceCondition("excluded.time", "chunkdata.time"));
 				PreparedStatement delete = database.prepareStatement("DELETE FROM chunkdata WHERE chunk_id=?")) {
 				for (ChunkFlagger.FlagData data : flags) {
 					if (data.getLastVisit() == Config.FLAG_DEFAULT) {
