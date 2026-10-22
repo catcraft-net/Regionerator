@@ -10,6 +10,7 @@
 
 package com.github.jikoo.regionerator;
 
+import com.github.jikoo.regionerator.database.CompactResult;
 import com.github.jikoo.regionerator.database.DatabaseAdapter;
 import com.github.jikoo.regionerator.database.FlagFilter;
 import com.github.jikoo.regionerator.database.PruneResult;
@@ -280,6 +281,25 @@ public class ChunkFlagger {
 	@NotNull PruneResult prune(@NotNull FlagFilter filter, long deletionRecordCutoff, @NotNull BooleanSupplier cancelled)
 			throws Exception {
 		return adapter.prune(filter, deletionRecordCutoff, cancelled);
+	}
+
+	/**
+	 * Rewrites the database file without unused space.
+	 *
+	 * @param cancelled checked between steps to stop early
+	 * @return the outcome, or {@code null} if the database does not support compacting
+	 * @throws Exception if the database cannot be compacted
+	 * @see DatabaseAdapter#compact(BooleanSupplier)
+	 */
+	@Nullable CompactResult compact(@NotNull BooleanSupplier cancelled) throws Exception {
+		return adapter.compact(cancelled);
+	}
+
+	/**
+	 * Interrupts a long-running database maintenance step.
+	 */
+	void interruptMaintenance() {
+		adapter.interruptMaintenance();
 	}
 
 	/**

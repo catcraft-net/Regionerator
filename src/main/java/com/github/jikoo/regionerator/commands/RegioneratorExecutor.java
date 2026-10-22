@@ -127,6 +127,11 @@ public class RegioneratorExecutor implements TabExecutor {
 			return true;
 		}
 
+		if (args[0].equals("compact")) {
+			plugin.getFlagMaintenance().compact(sender);
+			return true;
+		}
+
 		if (args[0].equals("cache")) {
 			sender.sendMessage("Cached chunk values: " + plugin.getFlagger().getCached());
 			sender.sendMessage("Queued saves: " + plugin.getFlagger().getQueued());
@@ -203,8 +208,8 @@ public class RegioneratorExecutor implements TabExecutor {
 
 		if (args.length == 1) {
 			String[] completions = sender instanceof Player
-					? new String[]{"pause", "resume", "reload", "flag", "unflag", "cache", "prune", "check"}
-					: new String[]{"pause", "resume", "reload", "flag", "unflag", "cache", "prune"};
+					? new String[]{"pause", "resume", "reload", "flag", "unflag", "cache", "prune", "compact", "check"}
+					: new String[]{"pause", "resume", "reload", "flag", "unflag", "cache", "prune", "compact"};
 			return TabCompleter.completeString(args[0], completions);
 		}
 

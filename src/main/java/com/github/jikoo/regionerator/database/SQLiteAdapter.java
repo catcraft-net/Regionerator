@@ -14,6 +14,7 @@ import com.github.jikoo.regionerator.ChunkFlagger;
 import com.github.jikoo.regionerator.util.yaml.Config;
 import org.jetbrains.annotations.NotNull;
 
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
@@ -42,18 +43,22 @@ public class SQLiteAdapter extends SQLeadenAdapter {
 			END""";
 	private static final String DROP_DELETION_RECORD_TRIGGER = "DROP TRIGGER IF EXISTS chunkdataold";
 
-	SQLiteAdapter(@NotNull Logger logger, @NotNull Connection database) throws SQLException {
-		super(logger, database);
+	SQLiteAdapter(@NotNull Logger logger, @NotNull Path file) throws SQLException {
+		super(logger, file);
+	}
+
+	@Override
+	void setUp(@NotNull Connection connection) throws SQLException {
+		super.setUp(connection);
 
 		// Set up triggers, replacing the trigger from earlier versions, which did not record when.
-		try (Statement st = database.createStatement()) {
+		try (Statement st = connection.createStatement()) {
 			st.executeUpdate(DROP_DELETION_RECORD_TRIGGER);
 			st.executeUpdate(CREATE_DELETION_RECORD_TRIGGER);
-			database.commit();
 		} catch (SQLException e) {
 			logger.severe("An exception setting up database trigger!");
 			try {
-				DatabaseMetaData metaData = database.getMetaData();
+				DatabaseMetaData metaData = connection.getMetaData();
 				logger.warning(String.format("SQLite driver: %s %s", metaData.getDriverName(), metaData.getDriverVersion()));
 				logger.warning(String.format("SQLite database: %s %s", metaData.getDatabaseProductName(), metaData.getDatabaseProductVersion()));
 			} catch (SQLException ignored) {
@@ -63,19 +68,20 @@ public class SQLiteAdapter extends SQLeadenAdapter {
 	}
 
 	@Override
-	void beforePruneWrite(@NotNull Statement statement) throws SQLException {
+	void suspendDeletionRecords(@NotNull Statement statement) throws SQLException {
 		// Pruned flags were not deleted chunks; don't record them. Restored in the same transaction.
 		statement.executeUpdate(DROP_DELETION_RECORD_TRIGGER);
 	}
 
 	@Override
-	void afterPruneWrite(@NotNull Statement statement) throws SQLException {
+	void resumeDeletionRecords(@NotNull Statement statement) throws SQLException {
 		statement.executeUpdate(CREATE_DELETION_RECORD_TRIGGER);
 	}
 
 	@Override
 	public void update(@NotNull Collection<ChunkFlagger.FlagData> flags) throws SQLException {
-		synchronized (database) {
+		synchronized (lock) {
+			recordWrites(flags.stream().map(ChunkFlagger.FlagData::getChunkId).toList());
 			try (PreparedStatement upsert = database.prepareStatement("INSERT INTO chunkdata(chunk_id,time) VALUES (?,?) ON CONFLICT(chunk_id) DO UPDATE SET time=excluded.time WHERE "
 					+ replaceCondition("excluded.time", "chunkdata.time"));
 				PreparedStatement delete = database.prepareStatement("DELETE FROM chunkdata WHERE chunk_id=?")) {

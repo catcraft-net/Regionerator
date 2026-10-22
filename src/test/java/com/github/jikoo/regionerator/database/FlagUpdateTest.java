@@ -21,8 +21,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.lang.reflect.Constructor;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.logging.Logger;
@@ -133,8 +131,7 @@ class FlagUpdateTest {
   }
 
   private SQLeadenAdapter open(AdapterFactory factory) throws SQLException {
-    Connection connection = DriverManager.getConnection("jdbc:sqlite:" + dir.resolve("data.db"));
-    return factory.create(Logger.getLogger(getClass().getName()), connection);
+    return factory.create(Logger.getLogger(getClass().getName()), dir.resolve("data.db"));
   }
 
   static ChunkFlagger.FlagData flag(String chunkId, long time) throws ReflectiveOperationException {
@@ -146,7 +143,7 @@ class FlagUpdateTest {
 
   @FunctionalInterface
   interface AdapterFactory {
-    SQLeadenAdapter create(Logger logger, Connection connection) throws SQLException;
+    SQLeadenAdapter create(Logger logger, Path file) throws SQLException;
   }
 
 }

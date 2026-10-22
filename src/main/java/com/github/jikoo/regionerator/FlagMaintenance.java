@@ -10,6 +10,7 @@
 
 package com.github.jikoo.regionerator;
 
+import com.github.jikoo.regionerator.database.CompactResult;
 import com.github.jikoo.regionerator.database.PruneResult;
 import com.github.jikoo.regionerator.world.WorldInfo;
 import org.bukkit.World;
@@ -109,6 +110,48 @@ public class FlagMaintenance {
 		});
 	}
 
+	/**
+	 * Starts rewriting the flag database file without unused space. Must be called from the server thread.
+	 *
+	 * @param sender the sender to report to, or {@code null} for an automatic run
+	 * @return false if maintenance is already running
+	 */
+	public boolean compact(@Nullable CommandSender sender) {
+		if (!busy.compareAndSet(false, true)) {
+			if (sender != null) {
+				sender.sendMessage("Flag database maintenance is already running.");
+			}
+			return false;
+		}
+
+		if (sender != null) {
+			sender.sendMessage("Compacting flag database in the background.");
+		}
+		plugin.debug(DebugLevel.LOW, () -> "Compacting flag database.");
+
+		return submit(sender, () -> {
+			long start = System.nanoTime();
+			CompactResult result = plugin.getFlagger().compact(cancelled::get);
+			double seconds = (System.nanoTime() - start) / 1_000_000_000D;
+
+			if (result == null) {
+				report(sender, "Compacting the flag database needs SQLite 3.27 or newer with write-ahead logging.");
+			} else if (!result.complete()) {
+				report(sender, "Stopped compacting the flag database; it is unchanged.");
+			} else {
+				report(sender, String.format(
+						"Compacted flag database in %.1fs from %s to %s.",
+						seconds,
+						formatSize(result.sizeBefore()),
+						formatSize(result.sizeAfter())));
+			}
+		});
+	}
+
+	private static @NotNull String formatSize(long bytes) {
+		return String.format("%.1f MB", bytes / (1024D * 1024D));
+	}
+
 	private void suggestCompacting(@Nullable CommandSender sender) throws Exception {
 		long freeBytes = plugin.getFlagger().getFreeBytes();
 		if (freeBytes < SUGGEST_COMPACT_BYTES) {
@@ -116,8 +159,8 @@ public class FlagMaintenance {
 		}
 		File file = plugin.getFlagger().getDatabaseFile();
 		report(sender, String.format(
-				"The flag database file is %d MB, of which %d MB is unused. Run /regionerator compact to release it.",
-				file.length() / (1024 * 1024), freeBytes / (1024 * 1024)));
+				"The flag database file is %s, of which %s is unused. Run /regionerator compact to release it.",
+				formatSize(file.length()), formatSize(freeBytes)));
 	}
 
 	private boolean submit(@Nullable CommandSender sender, @NotNull MaintenanceTask task) {
@@ -125,9 +168,12 @@ public class FlagMaintenance {
 			executor.execute(() -> {
 				try {
 					task.run();
-				} catch (InterruptedException e) {
-					report(sender, "Flag database maintenance was interrupted.");
 				} catch (Exception e) {
+					if (cancelled.get()) {
+						// Interrupted for shutdown; the database is left as it was or consistent.
+						plugin.getLogger().info("Flag database maintenance stopped for shutdown.");
+						return;
+					}
 					plugin.getLogger().log(Level.SEVERE, "Flag database maintenance failed", e);
 					report(sender, "Flag database maintenance failed. Check the console for details.");
 				} finally {
@@ -158,6 +204,7 @@ public class FlagMaintenance {
 	 */
 	void shutdown() {
 		cancelled.set(true);
+		plugin.getFlagger().interruptMaintenance();
 		executor.shutdownNow();
 		try {
 			if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {

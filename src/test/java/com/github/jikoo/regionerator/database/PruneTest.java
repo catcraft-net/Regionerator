@@ -207,7 +207,7 @@ class PruneTest {
 
       @Override
       public boolean isHeld(@NotNull String chunkId) {
-        assertTrue(Thread.holdsLock(adapter.database), "Must be checked while the database is locked");
+        assertTrue(Thread.holdsLock(adapter.lock), "Must be checked while the database is locked");
         return "world_0_0".equals(chunkId);
       }
     }, CUTOFF, () -> false);
@@ -273,7 +273,7 @@ class PruneTest {
     assertEquals(FUTURE, adapter.get("world_0_0_old"));
     assertNotNull(getDeleted("world_0_0_old"), "The replacement trigger must record when");
     // Removing a deletion record must not make a record of the record.
-    synchronized (adapter.database) {
+    synchronized (adapter.lock) {
       try (Statement statement = adapter.database.createStatement()) {
         statement.executeUpdate("DELETE FROM chunkdata WHERE chunk_id='world_0_0_old'");
         adapter.database.commit();
@@ -283,7 +283,7 @@ class PruneTest {
   }
 
   private SQLeadenAdapter open(FlagUpdateTest.AdapterFactory factory) throws SQLException {
-    return factory.create(Logger.getLogger(getClass().getName()), connect());
+    return factory.create(Logger.getLogger(getClass().getName()), dir.resolve("data.db"));
   }
 
   private Connection connect() throws SQLException {
@@ -291,7 +291,7 @@ class PruneTest {
   }
 
   private void insertRecord(String chunkId, long time, Long deleted) throws SQLException {
-    synchronized (adapter.database) {
+    synchronized (adapter.lock) {
       try (PreparedStatement statement = adapter.database.prepareStatement(
           "INSERT INTO chunkdata(chunk_id,time,deleted) VALUES (?,?,?)")) {
         statement.setString(1, chunkId);
@@ -308,7 +308,7 @@ class PruneTest {
   }
 
   private Long getDeleted(String chunkId) throws SQLException {
-    synchronized (adapter.database) {
+    synchronized (adapter.lock) {
       try (PreparedStatement statement = adapter.database.prepareStatement(
           "SELECT deleted FROM chunkdata WHERE chunk_id=?")) {
         statement.setString(1, chunkId);
@@ -324,7 +324,7 @@ class PruneTest {
   }
 
   private long count() throws SQLException {
-    synchronized (adapter.database) {
+    synchronized (adapter.lock) {
       try (Statement statement = adapter.database.createStatement();
           ResultSet resultSet = statement.executeQuery("SELECT COUNT(*) FROM chunkdata")) {
         resultSet.next();

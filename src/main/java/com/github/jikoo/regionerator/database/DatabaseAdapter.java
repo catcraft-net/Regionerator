@@ -12,12 +12,14 @@ package com.github.jikoo.regionerator.database;
 
 import com.github.jikoo.regionerator.ChunkFlagger;
 import com.github.jikoo.regionerator.Regionerator;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.util.Collection;
 import java.util.function.BooleanSupplier;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Interface defining behavior for interacting with a database.
@@ -66,6 +68,24 @@ public interface DatabaseAdapter {
 	long getFreeBytes() throws Exception;
 
 	/**
+	 * Rewrites the database file without unused space.
+	 *
+	 * <p>A compacted copy is made from a snapshot while flags are still read and written, then brought up to date with
+	 * flags written meanwhile. The database is only locked briefly, to copy the last flags written and replace the
+	 * file. If compacting fails or is cancelled, the database is left as it was.
+	 *
+	 * @param cancelled checked between steps to stop early
+	 * @return the outcome, or {@code null} if the database does not support compacting
+	 * @throws Exception if the database cannot be compacted
+	 */
+	@Nullable CompactResult compact(@NotNull BooleanSupplier cancelled) throws Exception;
+
+	/**
+	 * Interrupts a long-running maintenance step, such as copying the database while compacting.
+	 */
+	void interruptMaintenance();
+
+	/**
 	 * Gets whether a chunk identifier belongs to a deletion record.
 	 *
 	 * @param chunkId the chunk identifier
@@ -79,15 +99,22 @@ public interface DatabaseAdapter {
 	static @NotNull DatabaseAdapter getAdapter(@NotNull Regionerator plugin) throws Exception {
 		Class.forName("org.sqlite.JDBC");
 
-		Connection connection = DriverManager.getConnection("jdbc:sqlite:" + plugin.getDataFolder().getAbsolutePath() + "/data.db");
-		DatabaseMetaData metaData = connection.getMetaData();
-
-		if (metaData.getDatabaseMajorVersion() < 3 || metaData.getDatabaseMajorVersion() == 3 && metaData.getDatabaseMinorVersion() < 24) {
-			// Terrible SQLite
-			return new SQLeadenAdapter(plugin.getLogger(), connection);
+		Path file = plugin.getDataFolder().toPath().resolve("data.db");
+		DatabaseMetaData metaData;
+		int major;
+		int minor;
+		try (Connection connection = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+			metaData = connection.getMetaData();
+			major = metaData.getDatabaseMajorVersion();
+			minor = metaData.getDatabaseMinorVersion();
 		}
 
-		return new SQLiteAdapter(plugin.getLogger(), connection);
+		if (major < 3 || major == 3 && minor < 24) {
+			// Terrible SQLite
+			return new SQLeadenAdapter(plugin.getLogger(), file);
+		}
+
+		return new SQLiteAdapter(plugin.getLogger(), file);
 
 	}
 
