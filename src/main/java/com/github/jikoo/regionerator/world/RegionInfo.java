@@ -12,8 +12,10 @@ package com.github.jikoo.regionerator.world;
 
 import com.github.jikoo.planarwrappers.util.Coords;
 import com.github.jikoo.regionerator.Regionerator;
+import com.github.jikoo.regionerator.util.ResetArea;
 import org.bukkit.World;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.util.BitSet;
@@ -28,6 +30,7 @@ public abstract class RegionInfo {
 
 	private final @NotNull WorldInfo world;
 	private final int lowestChunkX, lowestChunkZ;
+	private volatile @Nullable ResetArea resetArea;
 
 	/**
 	 * Constructs a new RegionInfo.
@@ -178,6 +181,32 @@ public abstract class RegionInfo {
 	public abstract @NotNull Stream<ChunkInfo> getChunks();
 
 	public abstract int getChunksPerRegion();
+
+	/**
+	 * Gets the number of chunks along each side of the region.
+	 *
+	 * @return the number of chunks per axis
+	 */
+	public abstract int getChunksPerAxis();
+
+	/**
+	 * Sets the area chunks marked for deletion must stay inside. If the server keeps some of them when the region is
+	 * written, the others are only deleted while still inside a large enough empty square.
+	 *
+	 * @param resetArea the area, or {@code null} to delete marked chunks individually
+	 */
+	public void setResetArea(@Nullable ResetArea resetArea) {
+		this.resetArea = resetArea;
+	}
+
+	/**
+	 * Gets the area chunks marked for deletion must stay inside.
+	 *
+	 * @return the area, or {@code null} if marked chunks are deleted individually
+	 */
+	protected @Nullable ResetArea getResetArea() {
+		return resetArea;
+	}
 
 	/**
 	 * Gets the instance of Regionerator loading the RegionInfo.

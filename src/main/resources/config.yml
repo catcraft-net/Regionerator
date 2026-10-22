@@ -59,7 +59,8 @@ deletion:
   # When deleting part of a region, only delete chunks that are part of a square of deletable
   # chunks at least this many chunks wide (e.g. 8 = 128x128 blocks). Lone deletable chunks next
   # to used areas are kept, so new terrain doesn't meet old terrain right beside players.
-  # Squares are only looked for inside one region (32x32 chunks). 0 or 1 deletes chunks individually.
+  # Squares may cross into neighbouring regions. Freshly generated chunks don't count towards a
+  # square. 0 or 1 deletes chunks individually; at most 16.
   min-reset-area: 0
   # On Paper and its forks, Regionerator coordinates its region file edits with the server
   # so both never write the same file at once. Other server software offers no way to do that,

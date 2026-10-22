@@ -440,6 +440,11 @@ class FlagPrunerTest {
       return 1024;
     }
 
+    @Override
+    public int getChunksPerAxis() {
+      return 32;
+    }
+
   }
 
 }

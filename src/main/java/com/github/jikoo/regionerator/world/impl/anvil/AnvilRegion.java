@@ -12,6 +12,7 @@ package com.github.jikoo.regionerator.world.impl.anvil;
 
 import com.github.jikoo.planarwrappers.util.Coords;
 import com.github.jikoo.regionerator.DebugLevel;
+import com.github.jikoo.regionerator.util.ResetArea;
 import com.github.jikoo.regionerator.world.ChunkInfo;
 import com.github.jikoo.regionerator.world.RegionInfo;
 import com.google.common.base.Preconditions;
@@ -185,6 +186,7 @@ public class AnvilRegion extends RegionInfo {
 			return access.runExclusive(regionX, regionZ, this::writeExclusive);
 		} finally {
 			Arrays.fill(pointerWipes, false);
+			setResetArea(null);
 		}
 	}
 
@@ -196,6 +198,7 @@ public class AnvilRegion extends RegionInfo {
 	 */
 	private boolean writeExclusive() throws IOException {
 		boolean wholeRegion = isEveryChunkWiped();
+		boolean[] marked = pointerWipes.clone();
 
 		// Leave chunks the server still has in memory or queued saves for. Their data would be
 		// written back after deletion, possibly for some data types but not others.
@@ -215,6 +218,7 @@ public class AnvilRegion extends RegionInfo {
 		// Headers were read without excluding the server; leave chunks it has saved since.
 		keepChangedChunks(SUBDIR_BLOCK_DATA, readBlockOffsets, readBlockTimes);
 		keepChangedChunks(SUBDIR_ENTITY_DATA, readEntityOffsets, readEntityTimes);
+		keepOutsideResetArea(marked);
 
 		if (wholeRegion && !isEveryChunkWiped() && getPlugin().config().isDeleteWholeRegionsOnly()) {
 			getPlugin().debug(DebugLevel.HIGH, () -> String.format(
@@ -231,6 +235,38 @@ public class AnvilRegion extends RegionInfo {
 		}
 
 		return !failed;
+	}
+
+	/**
+	 * Keeps marked chunks that are no longer inside a large enough empty square because the server kept others.
+	 * Otherwise a kept chunk would be left as old terrain surrounded by newly generated terrain.
+	 */
+	private void keepOutsideResetArea(boolean @NotNull [] marked) {
+		ResetArea area = getResetArea();
+		if (area == null) {
+			return;
+		}
+
+		boolean changed = false;
+		for (int i = 0; i < CHUNK_COUNT; ++i) {
+			if (marked[i] && !pointerWipes[i]) {
+				area.setEmpty(RegionFile.unpackLocalX(i), RegionFile.unpackLocalZ(i), false);
+				changed = true;
+			}
+		}
+		if (!changed) {
+			return;
+		}
+
+		for (int i = 0; i < CHUNK_COUNT; ++i) {
+			if (pointerWipes[i] && !area.isCovered(RegionFile.unpackLocalX(i), RegionFile.unpackLocalZ(i))) {
+				pointerWipes[i] = false;
+				int chunkX = getChunkX(i);
+				int chunkZ = getChunkZ(i);
+				getPlugin().debug(DebugLevel.HIGH, () -> String.format("Keeping chunk %s_%s_%s - its reset area is in use.",
+						getWorld().getName(), chunkX, chunkZ));
+			}
+		}
 	}
 
 	private boolean isEveryChunkWiped() {
@@ -416,6 +452,11 @@ public class AnvilRegion extends RegionInfo {
 	@Override
 	public int getChunksPerRegion() {
 		return CHUNK_COUNT;
+	}
+
+	@Override
+	public int getChunksPerAxis() {
+		return CHUNKS_PER_AXIS;
 	}
 
 	private class AnvilChunk extends ChunkInfo {

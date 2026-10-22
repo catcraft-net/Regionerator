@@ -40,6 +40,8 @@ public class Config extends ConfigYamlData {
 	public static final long FLAG_OH_NO = Long.MAX_VALUE - 2;
 	/** Constant representing a chunk that has been generated but not visited. Replaced by the first visit. */
 	public static final long FLAG_GENERATED = Long.MAX_VALUE;
+	/** Largest minimum reset area. Larger squares reach further into neighbouring regions, which costs more checks. */
+	private static final int MAX_MIN_RESET_AREA = 16;
 
 	private final Object lock = new Object();
 	private DebugLevel debugLevel;
@@ -94,7 +96,7 @@ public class Config extends ConfigYamlData {
 		millisBetweenCycles.set(TimeUnit.HOURS.toMillis(Math.max(0, getInt("deletion.hours-between-cycles"))));
 		rememberCycleDelay.set(getBoolean("deletion.remember-next-cycle-time"));
 		deleteWholeRegionsOnly.set(getBoolean("deletion.whole-regions-only"));
-		minResetArea.set(Math.max(0, Math.min(32, getInt("deletion.min-reset-area"))));
+		minResetArea.set(Math.max(0, Math.min(MAX_MIN_RESET_AREA, getInt("deletion.min-reset-area"))));
 		allowUnsafeRegionAccess.set(getBoolean("deletion.allow-unsafe-region-access"));
 		pruneAfterCycle.set(getBoolean("database.prune-after-cycle"));
 		deletionRecordRetention.set(TimeUnit.DAYS.toMillis(Math.max(0, getInt("database.keep-deletion-records-days"))));
