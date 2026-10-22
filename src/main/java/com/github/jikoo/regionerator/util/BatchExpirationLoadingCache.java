@@ -15,6 +15,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -192,31 +193,44 @@ public class BatchExpirationLoadingCache<K, V> {
 
 		new Thread(
 				() -> {
-					// If not yet at maximum batch size, wait before
-					if (expired.size() < maxBatchSize) {
-						try {
-							Thread.sleep(batchDelay);
-							expired.addAll(expirationMap.doExpiration());
-						} catch (InterruptedException e) {
-							System.err.println("Encountered exception while attempting to await larger batch:");
-							e.printStackTrace();
+					try {
+						// If not yet at maximum batch size, wait before
+						if (expired.size() < maxBatchSize) {
+							try {
+								Thread.sleep(batchDelay);
+								expired.addAll(expirationMap.doExpiration());
+							} catch (InterruptedException e) {
+								System.err.println("Encountered exception while attempting to await larger batch:");
+								e.printStackTrace();
+							}
 						}
-					}
 
-					ArrayList<V> expiredValues = new ArrayList<>();
-					Iterator<K> expiredIterator = expired.iterator();
-					while (expiredValues.size() < maxBatchSize && expiredIterator.hasNext()) {
-						K expiredKey = expiredIterator.next();
-						expiredIterator.remove();
-						// Don't remove if still in expiration map - still active.
-						V value = expirationMap.contains(expiredKey) ? internal.get(expiredKey) : internal.remove(expiredKey);
-						if (value != null) {
-							expiredValues.add(value);
+						// Other threads add to the expired set at any time, so the batch must be taken while
+						// holding the set's lock. Iterating it unlocked can throw ConcurrentModificationException.
+						List<K> expiredKeys = new ArrayList<>();
+						synchronized (expired) {
+							Iterator<K> expiredIterator = expired.iterator();
+							while (expiredKeys.size() < maxBatchSize && expiredIterator.hasNext()) {
+								expiredKeys.add(expiredIterator.next());
+								expiredIterator.remove();
+							}
 						}
-					}
 
-					expirationConsumer.accept(expiredValues);
-					expirationQueued.set(false);
+						ArrayList<V> expiredValues = new ArrayList<>();
+						for (K expiredKey : expiredKeys) {
+							// Don't remove if still in expiration map - still active.
+							V value = expirationMap.contains(expiredKey) ? internal.get(expiredKey) : internal.remove(expiredKey);
+							if (value != null) {
+								expiredValues.add(value);
+							}
+						}
+
+						expirationConsumer.accept(expiredValues);
+					} finally {
+						// Always release the queue, otherwise no further batch would ever run and the cache would
+						// neither save nor shrink until restart.
+						expirationQueued.set(false);
+					}
 
 					// Re-run expiration check to queue next batch if necessary
 					checkExpiration();
