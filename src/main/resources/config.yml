@@ -43,7 +43,7 @@ deletion:
   start-paused: false
   # Recovery time in milliseconds between expensive operations.
   # Recovery time is always waited between region checks.
-  deletion-recovery-time: 250
+  recovery-time: 250
   # Number of chunks with expensive checks between recovery delays.
   # Values >= 1024 cause no additional recovery time.
   expensive-checks-between-recovery: 128
@@ -51,6 +51,14 @@ deletion:
   hours-between-cycles: 12
   # Whether to remember time for next cycle on plugin load
   remember-next-cycle-time: false
+  # Only delete regions in which every chunk can be deleted, never individual chunks.
+  # Keeping partly-used regions intact avoids newly generated terrain meeting old terrain
+  # at chunk borders inside a region, at the cost of freeing less space.
+  whole-regions-only: false
+  # On Paper and its forks, Regionerator coordinates its region file edits with the server
+  # so both never write the same file at once. Other server software offers no way to do that,
+  # so deletion is disabled there unless this is enabled. Enabling it risks corrupted chunks.
+  allow-unsafe-region-access: false
 
 # Worlds the plugin is able to delete regions in
 worlds:

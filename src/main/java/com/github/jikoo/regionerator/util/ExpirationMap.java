@@ -10,33 +10,41 @@
 
 package com.github.jikoo.regionerator.util;
 
-import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.TreeMap;
 import org.jetbrains.annotations.NotNull;
 
 /**
  * Wrapper for mapping keys to timestamps for expiration.
+ *
+ * <p>All access is synchronized. The timestamp buckets and the reverse lookup must be updated
+ * together, otherwise a value accessed by two threads at once can be left in a stale bucket.
  */
 public class ExpirationMap<V> {
 
-	private final ConcurrentSkipListMap<Long, Collection<V>> multiMap = new ConcurrentSkipListMap<>();
-	private final ConcurrentHashMap<V, Long> inverse = new ConcurrentHashMap<>();
+	private final TreeMap<Long, Set<V>> multiMap = new TreeMap<>();
+	private final Map<V, Long> inverse = new HashMap<>();
 	private final long durationMillis;
 	private final int maxSize;
 	private final long expirationFrequency;
-	private final AtomicLong lastExpiration = new AtomicLong();
+	private long lastExpiration = 0;
 
 	public ExpirationMap(long durationMillis) {
 		this(durationMillis, -1, 10_000L);
 	}
 
+	/**
+	 * Construct a new {@code ExpirationMap}.
+	 *
+	 * @param durationMillis the time in milliseconds before a value expires
+	 * @param maxSize the maximum number of values to retain, or a negative number for no limit
+	 * @param expirationFrequency the minimum time in milliseconds between expiration checks
+	 */
 	public ExpirationMap(long durationMillis, int maxSize, long expirationFrequency) {
 		this.durationMillis = durationMillis;
 		this.maxSize = maxSize;
@@ -46,26 +54,29 @@ public class ExpirationMap<V> {
 	/**
 	 * Check and collect all values which have expired.
 	 *
+	 * <p>Values expire when their timestamp passes or, oldest first, when more than the maximum
+	 * number of values are stored.
+	 *
 	 * @return a {@link Set} of expired values
 	 */
-	public @NotNull Set<V> doExpiration() {
+	public synchronized @NotNull Set<V> doExpiration() {
 		long now = System.currentTimeMillis();
 
-		if (lastExpiration.get() >= now - expirationFrequency) {
+		if (lastExpiration >= now - expirationFrequency) {
 			return Collections.emptySet();
 		}
 
-		lastExpiration.set(now);
+		lastExpiration = now;
 
-		Iterator<Map.Entry<Long, Collection<V>>> iterator = multiMap.descendingMap().entrySet().iterator();
-		int count = 0;
+		Iterator<Map.Entry<Long, Set<V>>> iterator = multiMap.entrySet().iterator();
 		Set<V> values = new HashSet<>();
 
 		while (iterator.hasNext()) {
-			Map.Entry<Long, Collection<V>> next = iterator.next();
+			Map.Entry<Long, Set<V>> next = iterator.next();
 
-			if (next.getKey() > now && (count += next.getValue().size()) <= maxSize) {
-				continue;
+			if (next.getKey() > now && (maxSize < 0 || inverse.size() <= maxSize)) {
+				// Buckets are ordered by expiration; the remainder are neither expired nor over capacity.
+				break;
 			}
 
 			values.addAll(next.getValue());
@@ -85,28 +96,21 @@ public class ExpirationMap<V> {
 	 *
 	 * @param value the value to add
 	 */
-	public void add(V value) {
-		// Potential (slight) optimization: Bucket to nearest expiration frequency
-		// Would need a max frequency cap.
-		Long timestamp = System.currentTimeMillis() + durationMillis;
-		Long replacedTimestamp = inverse.replace(value, timestamp);
+	public synchronized void add(V value) {
+		long timestamp = System.currentTimeMillis() + durationMillis;
+		Long replacedTimestamp = inverse.put(value, timestamp);
 
 		if (replacedTimestamp != null) {
+			if (replacedTimestamp == timestamp) {
+				// Already in the correct bucket.
+				return;
+			}
 			// Key was already set to expire. Remove old expiration entry.
-			multiMap.computeIfPresent(replacedTimestamp, (oldTimestamp, collection) -> {
-				collection.remove(value);
-				return collection.isEmpty() ? null : collection;
-			});
+			removeFromBucket(replacedTimestamp, value);
 		}
 
 		// Add new expiration entry.
-		multiMap.compute(timestamp, (newTimestamp, collection) -> {
-			if (collection == null) {
-				collection = new HashSet<>();
-			}
-			collection.add(value);
-			return collection;
-		});
+		multiMap.computeIfAbsent(timestamp, key -> new HashSet<>()).add(value);
 	}
 
 	/**
@@ -114,13 +118,17 @@ public class ExpirationMap<V> {
 	 *
 	 * @param value the value to remove
 	 */
-	public void remove(V value) {
+	public synchronized void remove(V value) {
 		Long removedTimestamp = inverse.remove(value);
 		if (removedTimestamp != null) {
-			multiMap.computeIfPresent(removedTimestamp, (oldTimestamp, collection) -> {
-				collection.remove(value);
-				return collection.isEmpty() ? null : collection;
-			});
+			removeFromBucket(removedTimestamp, value);
+		}
+	}
+
+	private void removeFromBucket(long timestamp, V value) {
+		Set<V> bucket = multiMap.get(timestamp);
+		if (bucket != null && bucket.remove(value) && bucket.isEmpty()) {
+			multiMap.remove(timestamp);
 		}
 	}
 
@@ -130,14 +138,23 @@ public class ExpirationMap<V> {
 	 * @param value the value to check for
 	 * @return true if the value is present
 	 */
-	public boolean contains(V value) {
+	public synchronized boolean contains(V value) {
 		return inverse.containsKey(value);
+	}
+
+	/**
+	 * Gets the number of values currently mapped.
+	 *
+	 * @return the number of values
+	 */
+	public synchronized int size() {
+		return inverse.size();
 	}
 
 	/**
 	 * Clears all mapped values.
 	 */
-	public void clear() {
+	public synchronized void clear() {
 		multiMap.clear();
 		inverse.clear();
 	}

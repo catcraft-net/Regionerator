@@ -36,6 +36,14 @@ public class WorldManager {
 		worlds.remove(world.getName());
 	}
 
+	/**
+	 * Releases all cached worlds so they are recreated with current settings. Running deletions keep the
+	 * instances they already hold.
+	 */
+	public void releaseAll() {
+		worlds.clear();
+	}
+
 	private @NotNull WorldInfo getWorldImpl(@NotNull World world) {
 		return new AnvilWorld(plugin, world);
 	}

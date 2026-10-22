@@ -42,6 +42,15 @@ public abstract class WorldInfo {
 	}
 
 	/**
+	 * Gets whether region data in the world can be modified safely.
+	 *
+	 * @return true if regions may be deleted
+	 */
+	public boolean canModifyRegions() {
+		return true;
+	}
+
+	/**
 	 * Gets {@link RegionInfo} for the specified region coordinates. Note that the region may not exist - check {@link RegionInfo#exists()}.
 	 *
 	 * @param regionX the region's X coordinate

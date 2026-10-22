@@ -157,6 +157,8 @@ public class Regionerator extends JavaPlugin {
 		}
 		// Remove only hooks added by Regionerator to not break other plugins' hooks on reload.
 		protectionHooks.removeIf(hook -> hook.getClass().getPackage().getName().equals("com.github.jikoo.regionerator.hooks"));
+		// Recreate world data access in case region access settings changed.
+		worldManager.releaseAll();
 
 		debug(DebugLevel.LOW, () -> "Loading features...");
 

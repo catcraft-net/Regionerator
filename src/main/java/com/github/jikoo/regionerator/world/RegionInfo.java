@@ -52,10 +52,23 @@ public abstract class RegionInfo {
 	/**
 	 * Saves changes to the RegionInfo.
 	 *
+	 * <p>Chunks may be left in place if the server is using them or they changed since being read. Use
+	 * {@link ChunkInfo#isOrphaned()} afterwards to see which chunks were removed.
+	 *
 	 * @return true if the RegionInfo is saved successfully
 	 * @throws IOException if there is an error writing the RegionInfo
 	 */
 	public abstract boolean write() throws IOException;
+
+	/**
+	 * Gets whether the server is currently using the region's data. Regions in use are not modified.
+	 *
+	 * @return true if the server is using the region
+	 * @throws IOException if the server's state cannot be checked
+	 */
+	public boolean isInUseByServer() throws IOException {
+		return false;
+	}
 
 	/**
 	 * Gets the {@link WorldInfo} containing the RegionInfo.

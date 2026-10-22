@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2023 by Jikoo.
+ * Copyright (c) 2015-2026 by Jikoo.
  *
  * Regionerator is licensed under a Creative Commons
  * Attribution-ShareAlike 4.0 International License.
@@ -39,26 +39,37 @@ public class AnvilRegion extends RegionInfo {
 	static final String[] DATA_SUBDIRS = { SUBDIR_BLOCK_DATA, SUBDIR_ENTITY_DATA, "poi" };
 
 	private final boolean[] pointerWipes = new boolean[CHUNK_COUNT];
+	// Header entries as read, used to detect chunks saved between reading and writing.
+	private final int[] readBlockOffsets = new int[CHUNK_COUNT];
+	private final int[] readBlockTimes = new int[CHUNK_COUNT];
+	private final int[] readEntityOffsets = new int[CHUNK_COUNT];
+	private final int[] readEntityTimes = new int[CHUNK_COUNT];
 	private final ByteBuffer volatileRegionHeader;
+	private final IntBuffer volatileChunkUsage;
 	private final IntBuffer volatileChunkTimes;
 	private final ByteBuffer storedRegionHeader;
 	private final IntBuffer storedChunkUsage;
 	private final IntBuffer storedChunkTimes;
 	private final ByteBuffer chunkHeader;
-	private final @NotNull Path worldDataFolder;
+	private final @NotNull RegionFileAccess access;
+	private final int regionX;
+	private final int regionZ;
 	private final @NotNull String fileName;
 
 	AnvilRegion(
 					@NotNull AnvilWorld world,
-					@NotNull Path worldDataFolder,
+					@NotNull RegionFileAccess access,
 					int regionX,
 					int regionZ,
 					@NotNull String fileFormat) {
 		super(world, Coords.regionToChunk(regionX), Coords.regionToChunk(regionZ));
-		this.worldDataFolder = worldDataFolder;
+		this.access = access;
+		this.regionX = regionX;
+		this.regionZ = regionZ;
 		this.fileName = String.format(fileFormat, regionX, regionZ);
 
 		volatileRegionHeader = ByteBuffer.allocateDirect(RegionFile.REGION_HEADER_LENGTH);
+		volatileChunkUsage = volatileRegionHeader.slice(0, RegionFile.SECTOR_BYTES).asIntBuffer();
 		volatileChunkTimes = volatileRegionHeader.slice(RegionFile.SECTOR_BYTES, RegionFile.SECTOR_BYTES).asIntBuffer();
 		storedRegionHeader = ByteBuffer.allocateDirect(volatileRegionHeader.capacity());
 		storedChunkUsage = storedRegionHeader.slice(0, RegionFile.SECTOR_BYTES).asIntBuffer();
@@ -68,7 +79,7 @@ public class AnvilRegion extends RegionInfo {
 
 	@Contract("_ -> new")
 	private @NotNull Path getRegionPath(@NotNull String dir) {
-		return worldDataFolder.resolve(Path.of(dir, fileName));
+		return access.getFolder(dir).resolve(fileName);
 	}
 
 	@Contract("_ -> new")
@@ -84,7 +95,8 @@ public class AnvilRegion extends RegionInfo {
 		// We don't read POI data because it generally only updates with a world or entity change.
 		// It's effectively a redundant disk operation.
 		Path blockDataFile = getRegionPath(SUBDIR_BLOCK_DATA);
-		if (Files.isRegularFile(blockDataFile)) {
+		boolean hasBlockData = Files.isRegularFile(blockDataFile);
+		if (hasBlockData) {
 			// If file exists, read block data.
 			try (RegionFile regionFileBlockData = createRegionFile(blockDataFile)) {
 				// Read world data.
@@ -94,23 +106,25 @@ public class AnvilRegion extends RegionInfo {
 
 				// Clobber all our existing data with the new data.
 				storeCurrentHeader();
+				snapshotHeader(readBlockOffsets, readBlockTimes);
 			} catch (IOException e) {
 				return acceptOrRethrow(e);
 			} catch (DataFormatException e) {
 				throw new IOException(e);
 			}
 		} else {
-			// If block data does not exist, entity data should be deleted too. Reading it is unnecessary.
+			// If block data does not exist, entity data should be deleted too.
 			// Wipe header in case this is a re-read.
-			for (int index = 0; index < RegionFile.REGION_HEADER_LENGTH; ++index) {
-				storedRegionHeader.put(index, (byte) 0);
-			}
-			return true;
+			wipeStoredHeader();
+			Arrays.fill(readBlockOffsets, 0);
+			Arrays.fill(readBlockTimes, 0);
 		}
 
 		Path entityDataFile = getRegionPath(SUBDIR_ENTITY_DATA);
 		if (!Files.isRegularFile(entityDataFile)) {
 			// If entity data doesn't exist, our data is fully updated.
+			Arrays.fill(readEntityOffsets, 0);
+			Arrays.fill(readEntityTimes, 0);
 			return true;
 		}
 		try (RegionFile regionFileEntityData = createRegionFile(entityDataFile)) {
@@ -119,8 +133,13 @@ public class AnvilRegion extends RegionInfo {
 			regionFileEntityData.readHeader();
 			regionFileEntityData.close();
 
-			// Use the more recent of block data and entity data modification times.
-			storeMoreRecentTimes();
+			if (hasBlockData) {
+				// Use the more recent of block data and entity data modification times.
+				storeMoreRecentTimes();
+			}
+			snapshotHeader(readEntityOffsets, readEntityTimes);
+		} catch (IOException e) {
+			return acceptOrRethrow(e);
 		} catch (DataFormatException e) {
 			throw new IOException(e);
 		}
@@ -133,6 +152,12 @@ public class AnvilRegion extends RegionInfo {
 		storedRegionHeader.put(volatileRegionHeader);
 	}
 
+	private void wipeStoredHeader() {
+		for (int index = 0; index < RegionFile.REGION_HEADER_LENGTH; ++index) {
+			storedRegionHeader.put(index, (byte) 0);
+		}
+	}
+
 	private void storeMoreRecentTimes() {
 		for (int i = 0; i < CHUNK_COUNT; ++i) {
 			int blockDataTime = storedChunkTimes.get(i);
@@ -143,17 +168,112 @@ public class AnvilRegion extends RegionInfo {
 		}
 	}
 
+	private void snapshotHeader(int @NotNull [] offsets, int @NotNull [] times) {
+		volatileChunkUsage.get(0, offsets);
+		volatileChunkTimes.get(0, times);
+	}
+
+	@Override
+	public boolean isInUseByServer() throws IOException {
+		return access.isRegionInUse(regionX, regionZ);
+	}
+
 	@Override
 	public boolean write() throws IOException {
+		try {
+			return access.runExclusive(regionX, regionZ, this::writeExclusive);
+		} finally {
+			Arrays.fill(pointerWipes, false);
+		}
+	}
+
+	/**
+	 * Write changes. Must only be called while the server cannot access the region's files.
+	 *
+	 * @return true if the region was written
+	 * @throws IOException if an I/O error occurs
+	 */
+	private boolean writeExclusive() throws IOException {
+		boolean wholeRegion = isEveryChunkWiped();
+
+		// Leave chunks the server still has in memory or queued saves for. Their data would be
+		// written back after deletion, possibly for some data types but not others.
+		for (int i = 0; i < CHUNK_COUNT; ++i) {
+			if (!pointerWipes[i]) {
+				continue;
+			}
+			int chunkX = getChunkX(i);
+			int chunkZ = getChunkZ(i);
+			if (access.isChunkBusy(chunkX, chunkZ)) {
+				pointerWipes[i] = false;
+				getPlugin().debug(DebugLevel.HIGH, () -> String.format("Keeping chunk %s_%s_%s - in use by server.",
+						getWorld().getName(), chunkX, chunkZ));
+			}
+		}
+
+		// Headers were read without excluding the server; leave chunks it has saved since.
+		keepChangedChunks(SUBDIR_BLOCK_DATA, readBlockOffsets, readBlockTimes);
+		keepChangedChunks(SUBDIR_ENTITY_DATA, readEntityOffsets, readEntityTimes);
+
+		if (wholeRegion && !isEveryChunkWiped() && getPlugin().config().isDeleteWholeRegionsOnly()) {
+			getPlugin().debug(DebugLevel.HIGH, () -> String.format(
+					"Skipping region %s/%s - only whole regions are deleted and some chunks are in use.",
+					getWorld().getName(), getIdentifier()));
+			return false;
+		}
+
 		// May just remove this and later change method signature - is either true or an exception is thrown
 		boolean failed = false;
 
 		for (String dir : DATA_SUBDIRS) {
 			failed |= !write(dir);
 		}
-		Arrays.fill(pointerWipes, false);
 
 		return !failed;
+	}
+
+	private boolean isEveryChunkWiped() {
+		for (boolean wipe : pointerWipes) {
+			if (!wipe) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private void keepChangedChunks(@NotNull String subdirectory, int @NotNull [] readOffsets, int @NotNull [] readTimes)
+			throws IOException {
+		Path mcaFilePath = getRegionPath(subdirectory);
+		if (Files.isRegularFile(mcaFilePath)) {
+			try (RegionFile regionFile = createRegionFile(mcaFilePath)) {
+				regionFile.open(AccessMode.READ);
+				regionFile.readHeader();
+			} catch (DataFormatException e) {
+				throw new IOException(e);
+			}
+		} else {
+			for (int index = 0; index < RegionFile.REGION_HEADER_LENGTH; ++index) {
+				volatileRegionHeader.put(index, (byte) 0);
+			}
+		}
+
+		for (int i = 0; i < CHUNK_COUNT; ++i) {
+			if (pointerWipes[i] && (volatileChunkUsage.get(i) != readOffsets[i] || volatileChunkTimes.get(i) != readTimes[i])) {
+				pointerWipes[i] = false;
+				int chunkX = getChunkX(i);
+				int chunkZ = getChunkZ(i);
+				getPlugin().debug(DebugLevel.HIGH, () -> String.format("Keeping chunk %s_%s_%s - %s data changed since check.",
+						getWorld().getName(), chunkX, chunkZ, subdirectory));
+			}
+		}
+	}
+
+	private int getChunkX(int index) {
+		return getLowestChunkX() + RegionFile.unpackLocalX(index);
+	}
+
+	private int getChunkZ(int index) {
+		return getLowestChunkZ() + RegionFile.unpackLocalZ(index);
 	}
 
 	private boolean write(@NotNull String subdirectory) throws IOException {
@@ -168,14 +288,16 @@ public class AnvilRegion extends RegionInfo {
 			regionFile.open(AccessMode.WRITE_DSYNC);
 			regionFile.readHeader();
 			boolean headerEmpty = true;
+			boolean modified = false;
 			for (int i = 0; i < pointerWipes.length; ++i) {
 				if (pointerWipes[i]) {
+					modified |= regionFile.isPresent(i);
 					regionFile.deleteChunk(i);
 				} else if (headerEmpty && regionFile.isPresent(i)) {
 					headerEmpty = false;
 					if (getPlugin().debug(DebugLevel.HIGH)) {
-						int chunkX = getLowestChunkX() + RegionFile.unpackLocalX(i);
-						int chunkZ = getLowestChunkZ() + RegionFile.unpackLocalZ(i);
+						int chunkX = getChunkX(i);
+						int chunkZ = getChunkZ(i);
 						getPlugin().getLogger().info(() ->
 								String.format(
 										"Rewriting header of region %s/%s due to non-zero index of chunk %s_%s_%s",
@@ -188,7 +310,9 @@ public class AnvilRegion extends RegionInfo {
 				}
 			}
 			if (!headerEmpty) {
-				regionFile.writeHeader();
+				if (modified) {
+					regionFile.writeHeader();
+				}
 				regionFile.close();
 
 				// Since the region still has content, update our stored data with the current data.
@@ -211,14 +335,19 @@ public class AnvilRegion extends RegionInfo {
 			Files.deleteIfExists(mcaFilePath);
 
 			// Also delete oversized chunks belonging to this region.
+			Path folder = access.getFolder(subdirectory);
 			for (int dX = 0; dX < CHUNKS_PER_AXIS; ++dX) {
 				for (int dZ = 0; dZ < CHUNKS_PER_AXIS; ++dZ) {
 					String xlChunkData = String.format("c.%s.%s.mcc", getLowestChunkX() + dX, getLowestChunkZ() + dZ);
-					Files.deleteIfExists(worldDataFolder.resolve(Path.of(subdirectory, xlChunkData)));
+					Files.deleteIfExists(folder.resolve(xlChunkData));
 				}
 			}
 		} catch (IOException e) {
 			acceptOrRethrow(e);
+		}
+
+		if (subdirectory.equals(SUBDIR_BLOCK_DATA)) {
+			wipeStoredHeader();
 		}
 
 		getPlugin().debug(DebugLevel.HIGH, () -> String.format("Deleted region %s/%s with empty header", subdirectory, getIdentifier()));
@@ -233,7 +362,7 @@ public class AnvilRegion extends RegionInfo {
 	@Override
 	public boolean exists() {
 		for (String dir : DATA_SUBDIRS) {
-			if (Files.exists(worldDataFolder.resolve(Path.of(dir, fileName)))) {
+			if (Files.exists(getRegionPath(dir))) {
 				return true;
 			}
 		}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2023 by Jikoo.
+ * Copyright (c) 2015-2026 by Jikoo.
  *
  * Regionerator is licensed under a Creative Commons
  * Attribution-ShareAlike 4.0 International License.
@@ -19,34 +19,70 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.stream.Stream;
 
 public class AnvilWorld extends WorldInfo {
 
+	private final @NotNull RegionFileAccess regionAccess;
+
 	public AnvilWorld(@NotNull Regionerator plugin, @NotNull World world) {
 		super(plugin, world);
+		this.regionAccess = createRegionAccess();
+	}
+
+	private @NotNull RegionFileAccess createRegionAccess() {
+		Logger logger = getPlugin().getLogger();
+		try {
+			RegionFileAccess access = MoonriseRegionFileAccess.create(getWorld());
+			logger.info(() -> "Region file edits in " + getWorld().getName() + " are coordinated with the server's chunk system.");
+			return access;
+		} catch (ReflectiveOperationException | IOException | RuntimeException | LinkageError e) {
+			boolean allowUnsafe = getPlugin().config().isUnsafeRegionAccessAllowed();
+			Path dataFolder;
+			try {
+				dataFolder = findWorldDataFolder().toPath();
+			} catch (IllegalStateException folderException) {
+				folderException.addSuppressed(e);
+				logger.log(Level.SEVERE, "Unable to locate region files for " + getWorld().getName() + ". Deletion is disabled.", folderException);
+				return new DirectRegionFileAccess(getWorld().getWorldFolder().toPath(), false);
+			}
+
+			if (allowUnsafe) {
+				logger.log(Level.WARNING, "Region file edits in " + getWorld().getName() + " cannot be coordinated with this server."
+						+ " Deleting anyway because deletion.allow-unsafe-region-access is enabled. This can corrupt chunks.", e);
+			} else {
+				logger.log(Level.SEVERE, "Region file edits in " + getWorld().getName() + " cannot be coordinated with this server,"
+						+ " so deletion is disabled. Editing region files the server has open can corrupt chunks.", e);
+			}
+			return new DirectRegionFileAccess(dataFolder, allowUnsafe);
+		}
+	}
+
+	@Override
+	public boolean canModifyRegions() {
+		return regionAccess.canModify();
 	}
 
 	@Override
 	public @NotNull RegionInfo getRegion(int regionX, int regionZ) {
-		Path dataFolder = findWorldDataFolder().toPath();
-		return new AnvilRegion(this, dataFolder, regionX, regionZ, "r.%s.%s.mca");
+		return new AnvilRegion(this, regionAccess, regionX, regionZ, "r.%s.%s.mca");
 	}
 
 	@Override
 	public @NotNull Stream<RegionInfo> getRegions() {
-		Path dataFolder = findWorldDataFolder().toPath();
-
 		List<String> fileNames = new ArrayList<>();
 		for (String folderName : AnvilRegion.DATA_SUBDIRS) {
-			File folder = dataFolder.resolve(folderName).toFile();
+			File folder = regionAccess.getFolder(folderName).toFile();
 			File[] files = folder.listFiles();
 			if (files == null) {
 				continue;
@@ -62,7 +98,7 @@ public class AnvilWorld extends WorldInfo {
 
 		return fileNames.stream()
 				.distinct()
-				.map(fileName -> parseRegion(dataFolder, fileName))
+				.map(this::parseRegion)
 				.filter(Objects::nonNull);
 	}
 
@@ -104,12 +140,12 @@ public class AnvilWorld extends WorldInfo {
 		return worldFolder;
 	}
 
-	private @Nullable RegionInfo parseRegion(Path dataFolder, String fileName) {
+	private @Nullable RegionInfo parseRegion(String fileName) {
 		Matcher matcher = RegionFile.FILE_NAME_PATTERN.matcher(fileName);
 		if (!matcher.matches() || !getPlugin().isEnabled()) {
 			return null;
 		}
-		return new AnvilRegion(this, dataFolder, Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)), "r.%s.%s" + matcher.group(3));
+		return new AnvilRegion(this, regionAccess, Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)), "r.%s.%s" + matcher.group(3));
 	}
 
 }

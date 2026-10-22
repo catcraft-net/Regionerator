@@ -49,6 +49,8 @@ public class Config extends ConfigYamlData {
 	private final AtomicInteger deletionChunkCount = new AtomicInteger();
 	private final AtomicBoolean rememberCycleDelay = new AtomicBoolean();
 	private final AtomicBoolean deleteFreshChunks = new AtomicBoolean();
+	private final AtomicBoolean deleteWholeRegionsOnly = new AtomicBoolean();
+	private final AtomicBoolean allowUnsafeRegionAccess = new AtomicBoolean();
 	private long cacheExpirationFrequency;
 	private long cacheRetention;
 	private int cacheBatchMax;
@@ -82,10 +84,12 @@ public class Config extends ConfigYamlData {
 			ticksPerFlag.set(20L * secondsPerFlag);
 		}
 
-		deletionRecovery.set(Math.max(0, getLong("deletion.recovery-time")));
+		deletionRecovery.set(Math.max(0, readRecoveryTime()));
 		deletionChunkCount.set(Math.max(1, getInt("deletion.expensive-checks-between-recovery")));
 		millisBetweenCycles.set(TimeUnit.HOURS.toMillis(Math.max(0, getInt("deletion.hours-between-cycles"))));
 		rememberCycleDelay.set(getBoolean("deletion.remember-next-cycle-time"));
+		deleteWholeRegionsOnly.set(getBoolean("deletion.whole-regions-only"));
+		allowUnsafeRegionAccess.set(getBoolean("deletion.allow-unsafe-region-access"));
 
 		cacheExpirationFrequency = TimeUnit.MILLISECONDS.convert(Math.max(0, getInt("cache.minimum-expiration-frequency")), TimeUnit.SECONDS);
 		cacheRetention = TimeUnit.MILLISECONDS.convert(Math.max(1, getInt("cache.retention")), TimeUnit.MINUTES);
@@ -93,6 +97,19 @@ public class Config extends ConfigYamlData {
 		cacheBatchDelay = Math.max(0L, getLong("cache.batch-delay"));
 		cacheMaxSize = Math.max(50_000, getInt("cache.max-cache-size"));
 
+	}
+
+	private long readRecoveryTime() {
+		// Configs generated before 3.0.0 shipped the key as deletion-recovery-time, which was never read.
+		// Prefer the real key, but honour the legacy one so those configs get the delay they ask for.
+		if (raw().isSet("deletion.recovery-time")) {
+			return getLong("deletion.recovery-time");
+		}
+		if (raw().isSet("deletion.deletion-recovery-time")) {
+			return getLong("deletion.deletion-recovery-time");
+		}
+		// Fall through to the bundled default.
+		return getLong("deletion.recovery-time");
 	}
 
 	public void reconsiderWorldValidity() {
@@ -150,6 +167,14 @@ public class Config extends ConfigYamlData {
 
 	public boolean isRememberCycleDelay() {
 		return rememberCycleDelay.get();
+	}
+
+	public boolean isDeleteWholeRegionsOnly() {
+		return deleteWholeRegionsOnly.get();
+	}
+
+	public boolean isUnsafeRegionAccessAllowed() {
+		return allowUnsafeRegionAccess.get();
 	}
 
 	public boolean isDeleteFreshChunks(@NotNull World world) {
