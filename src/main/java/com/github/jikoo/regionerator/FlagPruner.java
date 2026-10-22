@@ -11,6 +11,7 @@
 package com.github.jikoo.regionerator;
 
 import com.github.jikoo.regionerator.database.FlagFilter;
+import com.github.jikoo.regionerator.database.Pacer;
 import com.github.jikoo.regionerator.util.yaml.Config;
 import com.github.jikoo.regionerator.world.RegionInfo;
 import com.github.jikoo.regionerator.world.WorldInfo;
@@ -24,7 +25,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -42,21 +42,29 @@ import java.util.logging.Logger;
  * the server's use of regions can be detected. Region headers are first read without coordinating with the server
  * to find candidates cheaply. Each candidate is then confirmed while the server cannot open the region: the chunk
  * must still be absent from the region's files and the server must not have it in memory or queued for saving.
+ *
+ * <p>The pacer pauses between regions, so checking many regions in a row does not hold up the server's own region
+ * file use. Once the pacer says to stop, no more regions are checked and their flags are kept.
  */
 final class FlagPruner implements FlagFilter {
 
-	/** How long a region's chunk list is trusted for finding candidates before the region is read again. */
-	private static final long PRESENCE_LIFETIME_MILLIS = TimeUnit.MINUTES.toMillis(5);
 	private static final int CHUNKS_PER_AXIS = 32;
 
 	private final @NotNull Map<String, WorldInfo> worlds;
 	private final @NotNull Predicate<String> held;
+	private final @NotNull Pacer pacer;
 	private final @NotNull Logger logger;
 	private final long now;
-	private final @NotNull Map<String, Map<Long, RegionPresence>> presence = new HashMap<>();
+	/**
+	 * Chunks found in each region, by world and region, kept for the whole run so each region is only read once. An
+	 * outdated list is safe: it only picks candidates, and every candidate is confirmed before removal.
+	 */
+	private final @NotNull Map<String, Map<Long, BitSet>> presence = new HashMap<>();
 	private final @NotNull Map<String, ChunkCoordinate> missingCandidates = new HashMap<>();
 	private long expiredFlags;
 	private long missingChunkFlags;
+	private boolean regionChecked;
+	private boolean stopped;
 	private boolean warned;
 
 	/**
@@ -64,11 +72,17 @@ final class FlagPruner implements FlagFilter {
 	 *
 	 * @param worlds the worlds whose chunks may be checked for existence, by name
 	 * @param held whether a flag is currently held in memory
+	 * @param pacer pauses between regions and decides when to stop
 	 * @param logger the logger for problems reading regions
 	 */
-	FlagPruner(@NotNull Map<String, WorldInfo> worlds, @NotNull Predicate<String> held, @NotNull Logger logger) {
+	FlagPruner(
+			@NotNull Map<String, WorldInfo> worlds,
+			@NotNull Predicate<String> held,
+			@NotNull Pacer pacer,
+			@NotNull Logger logger) {
 		this.worlds = worlds;
 		this.held = held;
+		this.pacer = pacer;
 		this.logger = logger;
 		this.now = System.currentTimeMillis();
 	}
@@ -118,6 +132,9 @@ final class FlagPruner implements FlagFilter {
 		missingCandidates.clear();
 
 		for (Map.Entry<RegionKey, Map<String, ChunkCoordinate>> entry : regions.entrySet()) {
+			if (!recoverBetweenRegions()) {
+				break;
+			}
 			RegionKey key = entry.getKey();
 			BitSet candidates = new BitSet(CHUNKS_PER_AXIS * CHUNKS_PER_AXIS);
 			entry.getValue().values().forEach(chunk -> candidates.set(getIndex(chunk.x(), chunk.z())));
@@ -176,12 +193,12 @@ final class FlagPruner implements FlagFilter {
 		int regionX = chunkX >> 5;
 		int regionZ = chunkZ >> 5;
 		try {
-			// Checked every time: the server may have opened the region since its chunks were listed.
-			if (world.isRegionInUse(regionX, regionZ)) {
+			BitSet chunks = getChunks(worldName, world, regionX, regionZ);
+			if (chunks == null || chunks.get(getIndex(chunkX, chunkZ))) {
 				return false;
 			}
-			BitSet chunks = getChunks(worldName, world, regionX, regionZ);
-			return chunks != null && !chunks.get(getIndex(chunkX, chunkZ));
+			// Checked again: the server may have opened the region since its chunks were listed.
+			return !world.isRegionInUse(regionX, regionZ);
 		} catch (IOException e) {
 			warn(e);
 			return false;
@@ -190,28 +207,62 @@ final class FlagPruner implements FlagFilter {
 
 	private @Nullable BitSet getChunks(@NotNull String worldName, @NotNull WorldInfo world, int regionX, int regionZ)
 			throws IOException {
-		Map<Long, RegionPresence> worldPresence = presence.computeIfAbsent(worldName, key -> new HashMap<>());
+		Map<Long, BitSet> worldPresence = presence.computeIfAbsent(worldName, key -> new HashMap<>());
 		long regionKey = (long) regionX << 32 | (regionZ & 0xFFFFFFFFL);
-		long currentTime = System.currentTimeMillis();
-		RegionPresence cached = worldPresence.get(regionKey);
-		if (cached != null && cached.expires() > currentTime) {
-			return cached.chunks();
+		if (worldPresence.containsKey(regionKey)) {
+			return worldPresence.get(regionKey);
 		}
 
-		RegionInfo region = world.getRegion(regionX, regionZ);
+		if (!recoverBetweenRegions()) {
+			// Not recorded; pruning is stopping.
+			return null;
+		}
+
 		BitSet chunks = null;
-		if (region.read()) {
-			chunks = new BitSet(CHUNKS_PER_AXIS * CHUNKS_PER_AXIS);
-			for (int localZ = 0; localZ < CHUNKS_PER_AXIS; ++localZ) {
-				for (int localX = 0; localX < CHUNKS_PER_AXIS; ++localX) {
-					if (region.hasChunk(localX, localZ)) {
-						chunks.set(getIndex(localX, localZ));
+		// Flags in regions the server has open are kept for this run.
+		if (!world.isRegionInUse(regionX, regionZ)) {
+			RegionInfo region = world.getRegion(regionX, regionZ);
+			if (region.read()) {
+				chunks = new BitSet(CHUNKS_PER_AXIS * CHUNKS_PER_AXIS);
+				for (int localZ = 0; localZ < CHUNKS_PER_AXIS; ++localZ) {
+					for (int localX = 0; localX < CHUNKS_PER_AXIS; ++localX) {
+						if (region.hasChunk(localX, localZ)) {
+							chunks.set(getIndex(localX, localZ));
+						}
 					}
 				}
 			}
 		}
-		worldPresence.put(regionKey, new RegionPresence(chunks, currentTime + PRESENCE_LIFETIME_MILLIS));
+		worldPresence.put(regionKey, chunks);
 		return chunks;
+	}
+
+	/**
+	 * Waits between regions, so reading many regions in a row does not hold up the server's own region file use.
+	 *
+	 * @return false if pruning must stop
+	 */
+	private boolean recoverBetweenRegions() {
+		if (stopped || pacer.isStopping()) {
+			stopped = true;
+			return false;
+		}
+		if (regionChecked) {
+			try {
+				pacer.pause();
+			} catch (InterruptedException e) {
+				// Leave the interrupt for the batch loop, which stops on it.
+				Thread.currentThread().interrupt();
+				stopped = true;
+				return false;
+			}
+			if (pacer.isStopping()) {
+				stopped = true;
+				return false;
+			}
+		}
+		regionChecked = true;
+		return true;
 	}
 
 	private void warn(@NotNull IOException e) {
@@ -248,7 +299,5 @@ final class FlagPruner implements FlagFilter {
 	record ChunkCoordinate(@NotNull String world, int x, int z) {}
 
 	private record RegionKey(@NotNull String world, int x, int z) {}
-
-	private record RegionPresence(@Nullable BitSet chunks, long expires) {}
 
 }

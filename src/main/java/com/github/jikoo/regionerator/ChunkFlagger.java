@@ -13,6 +13,7 @@ package com.github.jikoo.regionerator;
 import com.github.jikoo.regionerator.database.CompactResult;
 import com.github.jikoo.regionerator.database.DatabaseAdapter;
 import com.github.jikoo.regionerator.database.FlagFilter;
+import com.github.jikoo.regionerator.database.Pacer;
 import com.github.jikoo.regionerator.database.PruneResult;
 import com.github.jikoo.regionerator.util.BatchExpirationLoadingCache;
 import com.github.jikoo.regionerator.util.yaml.Config;
@@ -273,14 +274,14 @@ public class ChunkFlagger {
 	 *
 	 * @param filter decides which ordinary flags can be removed
 	 * @param deletionRecordCutoff deletion records made before this time are removed
-	 * @param cancelled checked between batches to stop early
+	 * @param pacer pauses between batches and is checked before each batch to stop early
 	 * @return the outcome
 	 * @throws Exception if the database cannot be read or written
-	 * @see DatabaseAdapter#prune(FlagFilter, long, BooleanSupplier)
+	 * @see DatabaseAdapter#prune(FlagFilter, long, Pacer)
 	 */
-	@NotNull PruneResult prune(@NotNull FlagFilter filter, long deletionRecordCutoff, @NotNull BooleanSupplier cancelled)
+	@NotNull PruneResult prune(@NotNull FlagFilter filter, long deletionRecordCutoff, @NotNull Pacer pacer)
 			throws Exception {
-		return adapter.prune(filter, deletionRecordCutoff, cancelled);
+		return adapter.prune(filter, deletionRecordCutoff, pacer);
 	}
 
 	/**

@@ -44,8 +44,6 @@ public class SQLeadenAdapter implements DatabaseAdapter {
 
 	/** Rows examined per batch while pruning. */
 	private static final int PRUNE_BATCH_SIZE = 1_000;
-	/** Pause between pruning batches so other database use is not held up. */
-	private static final long PRUNE_PAUSE_MILLIS = 5;
 	/** Size in bytes the write-ahead log is truncated to after a checkpoint. */
 	private static final long JOURNAL_SIZE_LIMIT = 16L * 1024 * 1024;
 	/** Flags copied per lock while bringing a compacted database up to date. */
@@ -202,7 +200,7 @@ public class SQLeadenAdapter implements DatabaseAdapter {
 	}
 
 	@Override
-	public @NotNull PruneResult prune(@NotNull FlagFilter filter, long deletionRecordCutoff, @NotNull BooleanSupplier cancelled)
+	public @NotNull PruneResult prune(@NotNull FlagFilter filter, long deletionRecordCutoff, @NotNull Pacer pacer)
 			throws SQLException, InterruptedException {
 		long now = System.currentTimeMillis();
 		long rowsChecked = 0;
@@ -214,7 +212,7 @@ public class SQLeadenAdapter implements DatabaseAdapter {
 		// keeps pruning from revisiting rows that INSERT OR REPLACE moves to the end while it runs.
 		long finalRowId = getLastRowId();
 
-		while (!cancelled.getAsBoolean()) {
+		while (!pacer.isStopping()) {
 			List<Row> batch = readBatch(lastRowId, finalRowId);
 			if (batch.isEmpty()) {
 				return new PruneResult(rowsChecked, flagsRemoved, recordsRemoved, recordsDated, true);
@@ -250,7 +248,11 @@ public class SQLeadenAdapter implements DatabaseAdapter {
 				recordsDated += counts[2];
 			}
 
-			Thread.sleep(PRUNE_PAUSE_MILLIS);
+			if (batch.size() < PRUNE_BATCH_SIZE) {
+				// A short batch is the last one.
+				return new PruneResult(rowsChecked, flagsRemoved, recordsRemoved, recordsDated, true);
+			}
+			pacer.pause();
 		}
 
 		return new PruneResult(rowsChecked, flagsRemoved, recordsRemoved, recordsDated, false);

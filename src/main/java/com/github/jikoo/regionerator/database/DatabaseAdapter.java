@@ -47,16 +47,17 @@ public interface DatabaseAdapter {
 	 * <p>Ordinary flags are removed when the filter allows it. Deletion records are removed once they were made before
 	 * the cutoff; records from before deletion times were stored are given the current time first. Rows are examined
 	 * in small batches and the database is only locked while a batch is read or written, so pruning does not hold up
-	 * other database use. A row is only removed if it still holds the value that was examined. Rows added after
-	 * pruning starts hold new flags and are not examined.
+	 * other database use. The pacer pauses between batches. A row is only removed if it still holds the value that
+	 * was examined. Rows added after pruning starts hold new flags and are not examined.
 	 *
 	 * @param filter decides which ordinary flags can be removed
 	 * @param deletionRecordCutoff deletion records made before this time are removed
-	 * @param cancelled checked between batches to stop early
+	 * @param pacer pauses between batches and is checked before each batch to stop early
 	 * @return the outcome
+	 * @throws InterruptedException if interrupted while pausing
 	 * @throws Exception if the database cannot be read or written
 	 */
-	@NotNull PruneResult prune(@NotNull FlagFilter filter, long deletionRecordCutoff, @NotNull BooleanSupplier cancelled)
+	@NotNull PruneResult prune(@NotNull FlagFilter filter, long deletionRecordCutoff, @NotNull Pacer pacer)
 			throws Exception;
 
 	/**

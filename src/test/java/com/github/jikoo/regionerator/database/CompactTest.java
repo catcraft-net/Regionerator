@@ -77,7 +77,7 @@ class CompactTest {
     adapter = open(factory);
     fill(0, ROWS);
     // Keep every tenth flag.
-    adapter.prune((chunkId, time) -> (time - FUTURE) % 10 != 0, 0, () -> false);
+    adapter.prune((chunkId, time) -> (time - FUTURE) % 10 != 0, 0, new RecordingPacer());
     assertTrue(adapter.getFreeBytes() > 0);
 
     CompactResult result = adapter.compact(() -> false);

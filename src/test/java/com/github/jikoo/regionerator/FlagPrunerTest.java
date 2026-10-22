@@ -10,6 +10,7 @@
 
 package com.github.jikoo.regionerator;
 
+import com.github.jikoo.regionerator.database.RecordingPacer;
 import com.github.jikoo.regionerator.util.yaml.Config;
 import com.github.jikoo.regionerator.world.ChunkInfo;
 import com.github.jikoo.regionerator.world.RegionInfo;
@@ -63,7 +64,7 @@ class FlagPrunerTest {
 
   @Test
   void removesExpiredVisits() {
-    FlagPruner pruner = new FlagPruner(Map.of(), id -> false, LOGGER);
+    FlagPruner pruner = new FlagPruner(Map.of(), id -> false, new RecordingPacer(), LOGGER);
 
     assertTrue(pruner.canRemove("world_0_0", PAST));
     assertTrue(pruner.canRemove("unknown", 0));
@@ -153,7 +154,7 @@ class FlagPrunerTest {
 
   @Test
   void reportsHeldFlags() {
-    FlagPruner pruner = new FlagPruner(Map.of(), "world_0_0"::equals, LOGGER);
+    FlagPruner pruner = new FlagPruner(Map.of(), "world_0_0"::equals, new RecordingPacer(), LOGGER);
 
     assertTrue(pruner.isHeld("world_0_0"));
     assertFalse(pruner.isHeld("world_0_1"));
@@ -194,6 +195,96 @@ class FlagPrunerTest {
   }
 
   @Test
+  void pausesBetweenRegions() {
+    StubWorld world = new StubWorld();
+    world.chunks.add(chunk(64, 0));
+    RecordingPacer pacer = new RecordingPacer();
+    FlagPruner pruner = pruner(world, pacer);
+
+    // Three regions read, with no pause before the first.
+    assertTrue(pruner.canRemove("world_0_0", FUTURE));
+    assertTrue(pruner.canRemove("world_32_0", FUTURE));
+    assertFalse(pruner.canRemove("world_64_0", FUTURE));
+    assertEquals(3, world.reads);
+    assertEquals(2, pacer.pauses);
+
+    // Confirming candidates in two regions pauses before each, since each holds the server's region locks.
+    assertEquals(2, pruner.confirm(List.of("world_0_0", "world_32_0")).size());
+    assertEquals(2, world.confirmations);
+    assertEquals(4, pacer.pauses);
+  }
+
+  @Test
+  void pausesOnlyForRegionsChecked() {
+    StubWorld world = new StubWorld();
+    RecordingPacer pacer = new RecordingPacer();
+    FlagPruner pruner = pruner(world, pacer);
+
+    for (int x = 0; x < 32; ++x) {
+      pruner.canRemove("world_" + x + "_0", FUTURE);
+      pruner.canRemove("world_" + x + "_40", PAST);
+      pruner.canRemove("world_" + x + "_80", Config.FLAG_ETERNAL);
+    }
+    pruner.confirm(List.of("world_0_40"));
+
+    // One region read; expired and permanent flags need no region.
+    assertEquals(1, world.reads);
+    assertEquals(0, world.confirmations);
+    assertEquals(0, pacer.pauses);
+  }
+
+  @Test
+  void checksNoRegionsWhenStopping() {
+    StubWorld world = new StubWorld();
+    RecordingPacer pacer = new RecordingPacer();
+    pacer.stopping = true;
+    FlagPruner pruner = pruner(world, pacer);
+
+    assertFalse(pruner.canRemove("world_0_0", FUTURE), "Flags needing a region are kept once pruning is stopping");
+    assertTrue(pruner.canRemove("world_0_1", PAST), "Expired flags need no region");
+    assertEquals(List.of("world_0_1"), pruner.confirm(List.of("world_0_1")));
+    assertEquals(0, world.reads);
+    assertEquals(0, world.confirmations);
+    assertEquals(0, pacer.pauses);
+  }
+
+  @Test
+  void stopsWhenStoppingDuringPause() {
+    StubWorld world = new StubWorld();
+    RecordingPacer pacer = new RecordingPacer();
+    pacer.stopAfterPauses = 1;
+    FlagPruner pruner = pruner(world, pacer);
+
+    assertTrue(pruner.canRemove("world_0_0", FUTURE));
+    assertFalse(pruner.canRemove("world_32_0", FUTURE), "Stopped while pausing before the second region");
+    assertEquals(List.of(), pruner.confirm(List.of("world_0_0")));
+    assertEquals(1, world.reads);
+    assertEquals(0, world.confirmations);
+    assertEquals(1, pacer.pauses);
+  }
+
+  @Test
+  void stopsWhenPauseInterrupted() {
+    StubWorld world = new StubWorld();
+    RecordingPacer pacer = new RecordingPacer();
+    pacer.interrupted = true;
+    FlagPruner pruner = pruner(world, pacer);
+
+    try {
+      assertTrue(pruner.canRemove("world_0_0", FUTURE));
+      assertFalse(pruner.canRemove("world_32_0", FUTURE));
+      assertTrue(Thread.currentThread().isInterrupted(), "The interrupt is left for the batch loop to stop on");
+      assertEquals(List.of(), pruner.confirm(List.of("world_0_0")));
+      assertEquals(1, world.reads);
+      assertEquals(0, world.confirmations);
+      assertEquals(1, pacer.pauses);
+    } finally {
+      // Clear the interrupt so it does not leak into other tests.
+      Thread.interrupted();
+    }
+  }
+
+  @Test
   void keepsFlagsInOtherWorlds() {
     FlagPruner pruner = pruner(new StubWorld());
 
@@ -228,7 +319,11 @@ class FlagPrunerTest {
   }
 
   private static FlagPruner pruner(StubWorld world) {
-    return new FlagPruner(Map.of("world", world), id -> false, LOGGER);
+    return pruner(world, new RecordingPacer());
+  }
+
+  private static FlagPruner pruner(StubWorld world, RecordingPacer pacer) {
+    return new FlagPruner(Map.of("world", world), id -> false, pacer, LOGGER);
   }
 
   private static long chunk(int x, int z) {

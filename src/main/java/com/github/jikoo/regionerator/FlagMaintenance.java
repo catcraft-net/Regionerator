@@ -11,6 +11,7 @@
 package com.github.jikoo.regionerator;
 
 import com.github.jikoo.regionerator.database.CompactResult;
+import com.github.jikoo.regionerator.database.Pacer;
 import com.github.jikoo.regionerator.database.PruneResult;
 import com.github.jikoo.regionerator.world.WorldInfo;
 import org.bukkit.World;
@@ -85,8 +86,9 @@ public class FlagMaintenance {
 		return submit(sender, () -> {
 			long start = System.nanoTime();
 			ChunkFlagger flagger = plugin.getFlagger();
-			FlagPruner pruner = new FlagPruner(worlds, flagger::isHeld, plugin.getLogger());
-			PruneResult result = flagger.prune(pruner, deletionRecordCutoff, cancelled::get);
+			Pacer pacer = new RecoveryPacer();
+			FlagPruner pruner = new FlagPruner(worlds, flagger::isHeld, pacer, plugin.getLogger());
+			PruneResult result = flagger.prune(pruner, deletionRecordCutoff, pacer);
 			double seconds = (System.nanoTime() - start) / 1_000_000_000D;
 
 			report(sender, String.format(
@@ -131,7 +133,7 @@ public class FlagMaintenance {
 
 		return submit(sender, () -> {
 			long start = System.nanoTime();
-			CompactResult result = plugin.getFlagger().compact(cancelled::get);
+			CompactResult result = plugin.getFlagger().compact(this::isStopping);
 			double seconds = (System.nanoTime() - start) / 1_000_000_000D;
 
 			if (result == null) {
@@ -169,7 +171,7 @@ public class FlagMaintenance {
 				try {
 					task.run();
 				} catch (Exception e) {
-					if (cancelled.get()) {
+					if (isStopping()) {
 						// Interrupted for shutdown; the database is left as it was or consistent.
 						plugin.getLogger().info("Flag database maintenance stopped for shutdown.");
 						return;
@@ -197,6 +199,35 @@ public class FlagMaintenance {
 		} catch (IllegalPluginAccessException e) {
 			// Plugin disabling.
 		}
+	}
+
+	/**
+	 * Gets whether maintenance must stop. Like deletion, maintenance stops once the plugin is no longer enabled.
+	 *
+	 * @return true if maintenance must stop
+	 */
+	private boolean isStopping() {
+		return cancelled.get() || !plugin.isEnabled();
+	}
+
+	/**
+	 * Waits the configured deletion recovery time between steps, as deletion does between regions.
+	 */
+	private final class RecoveryPacer implements Pacer {
+
+		@Override
+		public boolean isStopping() {
+			return FlagMaintenance.this.isStopping();
+		}
+
+		@Override
+		public void pause() throws InterruptedException {
+			long recoveryTime = plugin.config().getDeletionRecoveryMillis();
+			if (recoveryTime > 0) {
+				Thread.sleep(recoveryTime);
+			}
+		}
+
 	}
 
 	/**

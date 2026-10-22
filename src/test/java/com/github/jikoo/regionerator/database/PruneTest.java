@@ -38,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PruneTest {
@@ -69,7 +70,7 @@ class PruneTest {
         flag("world_0_2", Config.FLAG_ETERNAL),
         flag("world_0_3", Config.FLAG_GENERATED)));
 
-    PruneResult result = adapter.prune(EXPIRED, CUTOFF, () -> false);
+    PruneResult result = adapter.prune(EXPIRED, CUTOFF, new RecordingPacer());
 
     assertTrue(result.complete());
     assertEquals(4, result.rowsChecked());
@@ -87,7 +88,7 @@ class PruneTest {
     insertRecord("world_0_0_old", PAST, NOW);
     List<String> seen = new ArrayList<>();
 
-    adapter.prune((chunkId, time) -> seen.add(chunkId), CUTOFF, () -> false);
+    adapter.prune((chunkId, time) -> seen.add(chunkId), CUTOFF, new RecordingPacer());
 
     assertEquals(List.of(), seen);
     assertEquals(PAST, adapter.get("world_0_0_old"));
@@ -98,7 +99,7 @@ class PruneTest {
     adapter = open(SQLiteAdapter::new);
     adapter.update(List.of(flag("world_0_0", PAST)));
 
-    adapter.prune(EXPIRED, CUTOFF, () -> false);
+    adapter.prune(EXPIRED, CUTOFF, new RecordingPacer());
 
     assertEquals(Config.FLAG_DEFAULT, adapter.get("world_0_0"));
     assertEquals(Config.FLAG_DEFAULT, adapter.get("world_0_0_old"), "A pruned flag was not a deleted chunk");
@@ -108,7 +109,7 @@ class PruneTest {
   void deletionStillRecordedAfterPruning() throws Exception {
     adapter = open(SQLiteAdapter::new);
     adapter.update(List.of(flag("world_0_0", PAST)));
-    adapter.prune(EXPIRED, CUTOFF, () -> false);
+    adapter.prune(EXPIRED, CUTOFF, new RecordingPacer());
 
     adapter.update(List.of(flag("world_0_1", FUTURE)));
     adapter.update(List.of(flag("world_0_1", Config.FLAG_DEFAULT)));
@@ -125,7 +126,7 @@ class PruneTest {
     adapter = open(factory);
     insertRecord("world_0_0_old", PAST, null);
 
-    PruneResult result = adapter.prune(EXPIRED, CUTOFF, () -> false);
+    PruneResult result = adapter.prune(EXPIRED, CUTOFF, new RecordingPacer());
 
     assertEquals(1, result.recordsDated());
     assertEquals(0, result.recordsRemoved());
@@ -142,7 +143,7 @@ class PruneTest {
     insertRecord("world_0_0_old", PAST, CUTOFF - 1);
     insertRecord("world_0_1_old", PAST, CUTOFF + 1);
 
-    PruneResult result = adapter.prune(EXPIRED, CUTOFF, () -> false);
+    PruneResult result = adapter.prune(EXPIRED, CUTOFF, new RecordingPacer());
 
     assertEquals(1, result.recordsRemoved());
     assertEquals(0, result.flagsRemoved());
@@ -165,7 +166,7 @@ class PruneTest {
         throw new RuntimeException(e);
       }
       return true;
-    }, CUTOFF, () -> false);
+    }, CUTOFF, new RecordingPacer());
 
     assertEquals(FUTURE, adapter.get("world_0_0"), "A flag that changed after it was examined must be kept");
   }
@@ -186,7 +187,7 @@ class PruneTest {
       public @NotNull Collection<String> confirm(@NotNull Collection<String> chunkIds) {
         return chunkIds.stream().filter("world_0_1"::equals).toList();
       }
-    }, CUTOFF, () -> false);
+    }, CUTOFF, new RecordingPacer());
 
     assertEquals(1, result.flagsRemoved());
     assertEquals(PAST, adapter.get("world_0_0"));
@@ -210,7 +211,7 @@ class PruneTest {
         assertTrue(Thread.holdsLock(adapter.lock), "Must be checked while the database is locked");
         return "world_0_0".equals(chunkId);
       }
-    }, CUTOFF, () -> false);
+    }, CUTOFF, new RecordingPacer());
 
     assertEquals(1, result.flagsRemoved());
     assertEquals(PAST, adapter.get("world_0_0"));
@@ -226,31 +227,78 @@ class PruneTest {
       flags.add(flag("world_" + i + "_0", i % 2 == 0 ? PAST : FUTURE));
     }
     adapter.update(flags);
+    RecordingPacer pacer = new RecordingPacer();
 
-    PruneResult result = adapter.prune(EXPIRED, CUTOFF, () -> false);
+    PruneResult result = adapter.prune(EXPIRED, CUTOFF, pacer);
 
     assertTrue(result.complete());
     assertEquals(2_500, result.rowsChecked());
     assertEquals(1_250, result.flagsRemoved());
     assertEquals(1_250, count());
+    assertEquals(2, pacer.pauses, "Must pause between each of the three batches, and not after the last");
   }
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("com.github.jikoo.regionerator.database.FlagUpdateTest#adapters")
-  void stopsWhenCancelled(String name, FlagUpdateTest.AdapterFactory factory) throws Exception {
+  void pausesOnlyBetweenBatches(String name, FlagUpdateTest.AdapterFactory factory) throws Exception {
     adapter = open(factory);
-    List<ChunkFlagger.FlagData> flags = new ArrayList<>();
-    for (int i = 0; i < 2_500; ++i) {
-      flags.add(flag("world_" + i + "_0", PAST));
-    }
-    adapter.update(flags);
-    int[] batches = { 0 };
+    fill(999, PAST);
+    RecordingPacer pacer = new RecordingPacer();
 
-    PruneResult result = adapter.prune(EXPIRED, CUTOFF, () -> batches[0]++ > 0);
+    assertTrue(adapter.prune(EXPIRED, CUTOFF, pacer).complete());
+    assertEquals(0, pacer.pauses, "A single short batch needs no pause");
+
+    // A full batch may be followed by more rows, so it pauses before finding there are none.
+    fill(1_000, PAST);
+    assertTrue(adapter.prune(EXPIRED, CUTOFF, pacer).complete());
+    assertEquals(1, pacer.pauses);
+    assertEquals(0, count());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("com.github.jikoo.regionerator.database.FlagUpdateTest#adapters")
+  void stopsWhenStopping(String name, FlagUpdateTest.AdapterFactory factory) throws Exception {
+    adapter = open(factory);
+    fill(2_500, PAST);
+    RecordingPacer pacer = new RecordingPacer();
+    pacer.stopAfterPauses = 1;
+
+    PruneResult result = adapter.prune(EXPIRED, CUTOFF, pacer);
 
     assertFalse(result.complete());
     assertEquals(1_000, result.rowsChecked());
     assertEquals(1_500, count());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("com.github.jikoo.regionerator.database.FlagUpdateTest#adapters")
+  void doesNotStartWhenStopping(String name, FlagUpdateTest.AdapterFactory factory) throws Exception {
+    adapter = open(factory);
+    fill(10, PAST);
+    RecordingPacer pacer = new RecordingPacer();
+    pacer.stopping = true;
+
+    PruneResult result = adapter.prune(EXPIRED, CUTOFF, pacer);
+
+    assertFalse(result.complete());
+    assertEquals(0, result.rowsChecked());
+    assertEquals(10, count());
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("com.github.jikoo.regionerator.database.FlagUpdateTest#adapters")
+  void stopsWhenPauseInterrupted(String name, FlagUpdateTest.AdapterFactory factory) throws Exception {
+    adapter = open(factory);
+    fill(2_500, PAST);
+    RecordingPacer pacer = new RecordingPacer();
+    pacer.interrupted = true;
+
+    assertThrows(InterruptedException.class, () -> adapter.prune(EXPIRED, CUTOFF, pacer));
+
+    // The first batch was written before the pause; the database stays usable.
+    assertEquals(1_500, count());
+    adapter.update(List.of(flag("world_0_0", FUTURE)));
+    assertEquals(FUTURE, adapter.get("world_0_0"));
   }
 
   @Test
@@ -280,6 +328,14 @@ class PruneTest {
       }
     }
     assertEquals(Config.FLAG_DEFAULT, adapter.get("world_0_0_old_old"));
+  }
+
+  private void fill(int rows, long time) throws Exception {
+    List<ChunkFlagger.FlagData> flags = new ArrayList<>();
+    for (int i = 0; i < rows; ++i) {
+      flags.add(flag("world_" + i + "_0", time));
+    }
+    adapter.update(flags);
   }
 
   private SQLeadenAdapter open(FlagUpdateTest.AdapterFactory factory) throws SQLException {
