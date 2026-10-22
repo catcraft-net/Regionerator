@@ -11,6 +11,8 @@
 package com.github.jikoo.regionerator;
 
 import com.github.jikoo.regionerator.database.DatabaseAdapter;
+import com.github.jikoo.regionerator.database.FlagFilter;
+import com.github.jikoo.regionerator.database.PruneResult;
 import com.github.jikoo.regionerator.util.BatchExpirationLoadingCache;
 import com.github.jikoo.regionerator.util.yaml.Config;
 import org.bukkit.Bukkit;
@@ -28,6 +30,7 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.logging.Level;
 import java.util.regex.Pattern;
 
@@ -265,6 +268,50 @@ public class ChunkFlagger {
 	}
 
 	/**
+	 * Removes stored flags that no longer have any effect.
+	 *
+	 * @param filter decides which ordinary flags can be removed
+	 * @param deletionRecordCutoff deletion records made before this time are removed
+	 * @param cancelled checked between batches to stop early
+	 * @return the outcome
+	 * @throws Exception if the database cannot be read or written
+	 * @see DatabaseAdapter#prune(FlagFilter, long, BooleanSupplier)
+	 */
+	@NotNull PruneResult prune(@NotNull FlagFilter filter, long deletionRecordCutoff, @NotNull BooleanSupplier cancelled)
+			throws Exception {
+		return adapter.prune(filter, deletionRecordCutoff, cancelled);
+	}
+
+	/**
+	 * Gets whether a flag is held in memory. Held flags are written back when their value changes.
+	 *
+	 * @param chunkId the flag's chunk identifier
+	 * @return true if the flag is held in memory
+	 */
+	boolean isHeld(@NotNull String chunkId) {
+		return flagCache.contains(chunkId);
+	}
+
+	/**
+	 * Gets the number of bytes in the database file that hold no data.
+	 *
+	 * @return the unused bytes
+	 * @throws Exception if the database cannot be read
+	 */
+	long getFreeBytes() throws Exception {
+		return adapter.getFreeBytes();
+	}
+
+	/**
+	 * Gets the database file.
+	 *
+	 * @return the database file
+	 */
+	@NotNull File getDatabaseFile() {
+		return new File(plugin.getDataFolder(), "data.db");
+	}
+
+	/**
 	 * Force a save of all flags and close the connection.
 	 */
 	void shutdown() {
@@ -317,7 +364,7 @@ public class ChunkFlagger {
 	 * @return a {@link CompletableFuture<FlagData>}
 	 */
 	public @NotNull CompletableFuture<FlagData> getChunkFlagOnDelete(@NotNull World world, int chunkX, int chunkZ) {
-		return this.flagCache.get(getFlagDbId(world.getName(), chunkX, chunkZ) + "_old");
+		return this.flagCache.get(getFlagDbId(world.getName(), chunkX, chunkZ) + DatabaseAdapter.DELETION_RECORD_SUFFIX);
 	}
 
 	 /**

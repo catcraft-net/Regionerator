@@ -41,6 +41,13 @@ abstract class RegionFileAccess {
 	abstract boolean canModify();
 
 	/**
+	 * Gets whether {@link #isRegionInUse(int, int)} reflects the server's state.
+	 *
+	 * @return true if region use can be detected
+	 */
+	abstract boolean canDetectUse();
+
+	/**
 	 * Gets whether the server currently has any of a region's files open.
 	 *
 	 * @param regionX the region X coordinate

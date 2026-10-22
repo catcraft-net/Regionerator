@@ -11,6 +11,7 @@
 package com.github.jikoo.regionerator.world;
 
 import com.github.jikoo.regionerator.Regionerator;
+import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
@@ -48,6 +49,29 @@ public abstract class WorldInfo {
 	 */
 	public boolean canModifyRegions() {
 		return true;
+	}
+
+	/**
+	 * Gets whether {@link #isRegionInUse(int, int)} reflects the server's state. If not, regions must be assumed to
+	 * be in use.
+	 *
+	 * @return true if region use can be detected
+	 */
+	public boolean canDetectRegionUse() {
+		return false;
+	}
+
+	/**
+	 * Gets whether the server currently has any of a region's files open.
+	 *
+	 * @param regionX the region X coordinate
+	 * @param regionZ the region Z coordinate
+	 * @return true if the server is using the region
+	 * @throws IOException if the server's state cannot be checked
+	 * @see #canDetectRegionUse()
+	 */
+	public boolean isRegionInUse(int regionX, int regionZ) throws IOException {
+		return false;
 	}
 
 	/**

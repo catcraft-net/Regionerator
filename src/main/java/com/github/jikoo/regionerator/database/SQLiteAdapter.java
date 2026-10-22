@@ -27,19 +27,28 @@ import java.util.logging.Logger;
  */
 public class SQLiteAdapter extends SQLeadenAdapter {
 
+	/**
+	 * Records a removed flag's last value, and when it was removed, as a deletion record.
+	 *
+	 * @see DatabaseAdapter#DELETION_RECORD_SUFFIX
+	 */
+	private static final String CREATE_DELETION_RECORD_TRIGGER = """
+			CREATE TRIGGER chunkdataold
+			AFTER DELETE ON chunkdata
+			WHEN OLD.time NOT NULL AND substr(OLD.chunk_id, -4) <> '_old'
+			BEGIN
+			INSERT INTO chunkdata(chunk_id,time,deleted) VALUES (OLD.chunk_id || '_old', OLD.time, CAST(strftime('%s','now') AS INTEGER) * 1000)
+			ON CONFLICT(chunk_id) DO UPDATE SET time=excluded.time, deleted=excluded.deleted;
+			END""";
+	private static final String DROP_DELETION_RECORD_TRIGGER = "DROP TRIGGER IF EXISTS chunkdataold";
+
 	SQLiteAdapter(@NotNull Logger logger, @NotNull Connection database) throws SQLException {
 		super(logger, database);
 
-		// Set up triggers
+		// Set up triggers, replacing the trigger from earlier versions, which did not record when.
 		try (Statement st = database.createStatement()) {
-			st.executeUpdate(
-							"""
-											CREATE TRIGGER IF NOT EXISTS chunkdataold
-											AFTER DELETE ON chunkdata
-											WHEN OLD.time NOT NULL AND OLD.chunk_id NOT LIKE '%_old'
-											BEGIN
-											INSERT INTO chunkdata(chunk_id,time) VALUES (OLD.chunk_id || '_old',OLD.time) ON CONFLICT(chunk_id) DO UPDATE SET `time`=OLD.time;
-											END""");
+			st.executeUpdate(DROP_DELETION_RECORD_TRIGGER);
+			st.executeUpdate(CREATE_DELETION_RECORD_TRIGGER);
 			database.commit();
 		} catch (SQLException e) {
 			logger.severe("An exception setting up database trigger!");
@@ -51,6 +60,17 @@ public class SQLiteAdapter extends SQLeadenAdapter {
 			}
 			throw e;
 		}
+	}
+
+	@Override
+	void beforePruneWrite(@NotNull Statement statement) throws SQLException {
+		// Pruned flags were not deleted chunks; don't record them. Restored in the same transaction.
+		statement.executeUpdate(DROP_DELETION_RECORD_TRIGGER);
+	}
+
+	@Override
+	void afterPruneWrite(@NotNull Statement statement) throws SQLException {
+		statement.executeUpdate(CREATE_DELETION_RECORD_TRIGGER);
 	}
 
 	@Override

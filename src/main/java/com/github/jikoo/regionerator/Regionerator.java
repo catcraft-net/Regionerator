@@ -61,6 +61,7 @@ public class Regionerator extends JavaPlugin {
 	private MiscData miscData;
 	private FlaggingListener flagger;
 	private DebugListener debugListener;
+	private FlagMaintenance flagMaintenance;
 
 	@Override
 	public void onEnable() {
@@ -84,6 +85,7 @@ public class Regionerator extends JavaPlugin {
 		}
 
 		chunkFlagger = new ChunkFlagger(this);
+		flagMaintenance = new FlagMaintenance(this);
 		debugListener = new DebugListener(this);
 
 		PluginCommand command = getCommand("regionerator");
@@ -129,6 +131,10 @@ public class Regionerator extends JavaPlugin {
 			flagger.cancel();
 		}
 		getServer().getScheduler().cancelTasks(this);
+
+		if (flagMaintenance != null) {
+			flagMaintenance.shutdown();
+		}
 
 		if (chunkFlagger != null) {
 			getLogger().info("Shutting down flagger - currently holds " + chunkFlagger.getCached() + " flags.");
@@ -346,6 +352,10 @@ public class Regionerator extends JavaPlugin {
 
 	public boolean removeHook(Hook hook) {
 		return this.protectionHooks.remove(hook);
+	}
+
+	public FlagMaintenance getFlagMaintenance() {
+		return this.flagMaintenance;
 	}
 
 	public ChunkFlagger getFlagger() {

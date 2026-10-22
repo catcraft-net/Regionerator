@@ -60,6 +60,16 @@ deletion:
   # so deletion is disabled there unless this is enabled. Enabling it risks corrupted chunks.
   allow-unsafe-region-access: false
 
+# The flag database records when chunks were last visited.
+database:
+  # After each deletion cycle, remove flags that no longer have any effect: expired visits
+  # and flags for chunks that no longer exist. Permanent flags are always kept.
+  # "/regionerator prune" runs it immediately; "/regionerator compact" shrinks the file.
+  prune-after-cycle: true
+  # When a chunk is deleted, the time it was last visited is kept for /regionerator check.
+  # Days to keep that record after the chunk is deleted.
+  keep-deletion-records-days: 90
+
 # Worlds the plugin is able to delete regions in
 worlds:
   # "default" applies to all worlds not specified.

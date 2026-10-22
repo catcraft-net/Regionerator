@@ -74,6 +74,16 @@ public class AnvilWorld extends WorldInfo {
 	}
 
 	@Override
+	public boolean canDetectRegionUse() {
+		return regionAccess.canDetectUse();
+	}
+
+	@Override
+	public boolean isRegionInUse(int regionX, int regionZ) throws IOException {
+		return regionAccess.isRegionInUse(regionX, regionZ);
+	}
+
+	@Override
 	public @NotNull RegionInfo getRegion(int regionX, int regionZ) {
 		return new AnvilRegion(this, regionAccess, regionX, regionZ, "r.%s.%s.mca");
 	}

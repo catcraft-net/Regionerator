@@ -16,6 +16,7 @@ import org.bukkit.World;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
+import java.util.BitSet;
 import java.util.stream.Stream;
 
 /**
@@ -141,6 +142,33 @@ public abstract class RegionInfo {
 	 * @return the {@link ChunkInfo}
 	 */
 	public abstract @NotNull ChunkInfo getLocalChunk(int localChunkX, int localChunkZ);
+
+	/**
+	 * Gets whether block data for a chunk existed when the region was last read.
+	 *
+	 * @param localChunkX the chunk X coordinate within the region
+	 * @param localChunkZ the chunk Z coordinate within the region
+	 * @return true if the chunk exists
+	 */
+	public boolean hasChunk(int localChunkX, int localChunkZ) {
+		return !getLocalChunk(localChunkX, localChunkZ).isOrphaned();
+	}
+
+	/**
+	 * Gets which of the given chunks do not exist at all: the region's files hold no data for them, and the server
+	 * neither has them in memory nor has I/O queued for them. The region's files are read again while the server
+	 * cannot open them, so a chunk the server generated after the region was last read is never reported.
+	 *
+	 * <p>Chunks are indexed by {@code localChunkZ * 32 + localChunkX}. If the server has the region open or its use
+	 * cannot be detected, no chunks are reported.
+	 *
+	 * @param localChunks the chunks to check
+	 * @return the chunks that do not exist
+	 * @throws IOException if the region cannot be read or the server's state cannot be checked
+	 */
+	public @NotNull BitSet getAbsentChunks(@NotNull BitSet localChunks) throws IOException {
+		return new BitSet();
+	}
 
 	/**
 	 * Gets a {@link Stream<ChunkInfo>} requesting every {@link ChunkInfo} within the region.

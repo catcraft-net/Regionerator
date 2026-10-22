@@ -53,6 +53,8 @@ public class Config extends ConfigYamlData {
 	private final AtomicBoolean deleteFreshChunks = new AtomicBoolean();
 	private final AtomicBoolean deleteWholeRegionsOnly = new AtomicBoolean();
 	private final AtomicBoolean allowUnsafeRegionAccess = new AtomicBoolean();
+	private final AtomicBoolean pruneAfterCycle = new AtomicBoolean();
+	private final AtomicLong deletionRecordRetention = new AtomicLong();
 	private long cacheExpirationFrequency;
 	private long cacheRetention;
 	private int cacheBatchMax;
@@ -92,6 +94,8 @@ public class Config extends ConfigYamlData {
 		rememberCycleDelay.set(getBoolean("deletion.remember-next-cycle-time"));
 		deleteWholeRegionsOnly.set(getBoolean("deletion.whole-regions-only"));
 		allowUnsafeRegionAccess.set(getBoolean("deletion.allow-unsafe-region-access"));
+		pruneAfterCycle.set(getBoolean("database.prune-after-cycle"));
+		deletionRecordRetention.set(TimeUnit.DAYS.toMillis(Math.max(0, getInt("database.keep-deletion-records-days"))));
 
 		cacheExpirationFrequency = TimeUnit.MILLISECONDS.convert(Math.max(0, getInt("cache.minimum-expiration-frequency")), TimeUnit.SECONDS);
 		cacheRetention = TimeUnit.MILLISECONDS.convert(Math.max(1, getInt("cache.retention")), TimeUnit.MINUTES);
@@ -177,6 +181,14 @@ public class Config extends ConfigYamlData {
 
 	public boolean isUnsafeRegionAccessAllowed() {
 		return allowUnsafeRegionAccess.get();
+	}
+
+	public boolean isPruneAfterCycle() {
+		return pruneAfterCycle.get();
+	}
+
+	public long getDeletionRecordRetentionMillis() {
+		return deletionRecordRetention.get();
 	}
 
 	public boolean isDeleteFreshChunks(@NotNull World world) {
