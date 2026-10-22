@@ -29,6 +29,7 @@ import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Clock;
+import java.util.BitSet;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -87,6 +88,8 @@ public class RegionFile implements AutoCloseable {
   private final IntBuffer chunkOffsets;
   private final IntBuffer chunkTimestamps;
   private final SectorBitSet sectorsUsed;
+  /** Chunks deleted since the header was read whose external data is removed once the header is written. */
+  private final BitSet pendingExternalDeletes = new BitSet(SECTOR_INTS);
   private final ByteBuffer chunkHeader;
   private boolean regionHeaderRead = false;
   private @Nullable FileChannel file;
@@ -181,6 +184,13 @@ public class RegionFile implements AutoCloseable {
     int bytesRead = file.read(regionHeader, 0);
     regionHeader.flip();
 
+    if (bytesRead == -1) {
+      // Empty file. Clear the buffer so a reused buffer does not retain another file's header.
+      for (int index = 0; index < REGION_HEADER_LENGTH; ++index) {
+        regionHeader.put(index, (byte) 0);
+      }
+    }
+
     // Validate header data.
     if (bytesRead != -1 && bytesRead < REGION_HEADER_LENGTH) {
       throw new DataFormatException(String.format(
@@ -190,8 +200,9 @@ public class RegionFile implements AutoCloseable {
               REGION_HEADER_LENGTH));
     }
 
-    // Dump existing sector usage data.
+    // Dump existing sector usage data and any unwritten edits.
     sectorsUsed.clear();
+    pendingExternalDeletes.clear();
 
     // Chunk offset data is stored in a single integer per sector.
     for (int index = 0; index < SECTOR_INTS; ++index) {
@@ -221,7 +232,8 @@ public class RegionFile implements AutoCloseable {
   }
 
   /**
-   * Write the header of the region file.
+   * Write the header of the region file, then remove external data belonging to chunks deleted since the header was
+   * read.
    *
    * @throws ClosedChannelException if the backing {@link FileChannel} is not open
    * @throws IOException if an I/O error occurs. See {@link java.nio.channels.WritableByteChannel#write(ByteBuffer)}
@@ -241,6 +253,13 @@ public class RegionFile implements AutoCloseable {
 
     // Write header to start of file.
     file.write(regionHeader, 0);
+
+    // Only remove external chunk data once the header no longer points to it. Removing it first would
+    // leave an unreadable chunk if the header write failed.
+    for (int index = pendingExternalDeletes.nextSetBit(0); index >= 0; index = pendingExternalDeletes.nextSetBit(index + 1)) {
+      Files.deleteIfExists(getXlChunkPath(index));
+    }
+    pendingExternalDeletes.clear();
   }
 
   /**
@@ -313,9 +332,8 @@ public class RegionFile implements AutoCloseable {
    * @param z the Z coordinate
    * @throws IllegalArgumentException if the chunk coordinates are not either local or within the region's world bounds
    * @throws IllegalStateException if the existing header was never read
-   * @throws IOException if the chunk is extra-large and there is an exception deleting the file
    */
-  public void deleteChunk(int x, int z) throws IOException {
+  public void deleteChunk(int x, int z) {
     deleteChunk(packIndex(x, z));
   }
 
@@ -325,12 +343,13 @@ public class RegionFile implements AutoCloseable {
    * <p>This frees up the corresponding sectors, but does not compress the region to use those sectors. Doing so would
    * require rewriting the full region file, which is a very expensive prospect.
    *
+   * <p>The deletion takes effect on {@link #writeHeader()}, which also removes any external data for the chunk.
+   *
    * @param index the packed chunk index
    * @throws IllegalStateException if the existing header was never read
    * @throws IndexOutOfBoundsException if the index is negative or equals/exceeds the number of chunks in a region
-   * @throws IOException if the chunk is extra-large and there is an exception deleting the file
    */
-  public void deleteChunk(int index) throws IOException {
+  public void deleteChunk(int index) {
     if (!regionHeaderRead) {
       throw new IllegalStateException("Region header has not been successfully read!");
     }
@@ -343,7 +362,7 @@ public class RegionFile implements AutoCloseable {
 
     chunkOffsets.put(index, CHUNK_NOT_PRESENT);
     chunkTimestamps.put(index, (int) Clock.systemUTC().instant().getEpochSecond());
-    Files.deleteIfExists(getXlChunkPath(index)); // TODO should this not delete if not open/delete on write?
+    pendingExternalDeletes.set(index);
 
     int startSector = packedOffsetData >> BIT_COUNT_OFFSET_SECTOR_COUNT & BITMASK_OFFSET_START_SECTOR;
     if (startSector >= REGION_HEADER_SECTORS) {

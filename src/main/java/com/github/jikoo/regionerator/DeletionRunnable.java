@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.Phaser;
@@ -56,6 +57,9 @@ public class DeletionRunnable extends BukkitRunnable {
 		this.phaser = new Phaser(1);
 		this.world = plugin.getWorldManager().getWorld(world);
 		this.worldName = world.getName();
+		if (!this.world.canModifyRegions()) {
+			throw new IllegalStateException("Region files in " + worldName + " cannot be modified safely on this server.");
+		}
 	}
 
 	@Override
@@ -119,6 +123,11 @@ public class DeletionRunnable extends BukkitRunnable {
 		plugin.debug(DebugLevel.HIGH, () -> String.format("Checking %s: %s (%s)",
 				worldName, region.getIdentifier(), regionCount.get()));
 
+		// Regions the server has open cannot be edited safely and are likely in use anyway.
+		if (isInUseByServer(region)) {
+			return;
+		}
+
 		// Read the region's data from disk.
 		if (!readRegion(region)) {
 			return;
@@ -134,10 +143,12 @@ public class DeletionRunnable extends BukkitRunnable {
 		}
 
 		// Orphan chunks. N.B. Changes do not take effect until RegionInfo#write is called.
+		// Note which chunks exist before orphaning; whole-region deletions also include absent chunks.
+		Set<ChunkInfo> present = chunks.stream().filter(chunk -> !chunk.isOrphaned()).collect(Collectors.toSet());
 		chunks.forEach(ChunkInfo::setOrphaned);
 
 		// Write modified region to disk.
-		writeRegion(region, chunks);
+		writeRegion(region, chunks, present);
 
 		// If 5 seconds have elapsed since last log and 20 or more regions have been checked, log run stats.
 		long now = Instant.now().getEpochSecond();
@@ -150,6 +161,19 @@ public class DeletionRunnable extends BukkitRunnable {
 
 		// Do post-region recovery.
 		recover();
+	}
+
+	private boolean isInUseByServer(@NotNull RegionInfo region) {
+		try {
+			if (region.isInUseByServer()) {
+				plugin.debug(DebugLevel.HIGH, () -> "Skipping region - in use by server.");
+				return true;
+			}
+		} catch (IOException e) {
+			plugin.getLogger().log(Level.WARNING, "Unable to check whether region is in use!", e);
+			return true;
+		}
+		return false;
 	}
 
 	private boolean readRegion(@NotNull RegionInfo region) {
@@ -290,17 +314,19 @@ public class DeletionRunnable extends BukkitRunnable {
 
 	}
 
-	private void writeRegion(@NotNull RegionInfo region, List<ChunkInfo> chunks) {
+	private void writeRegion(@NotNull RegionInfo region, List<ChunkInfo> chunks, Set<ChunkInfo> present) {
 		try {
 			if (!region.write()) {
 				plugin.debug(DebugLevel.HIGH, () -> "Skipping region - in use by server.");
 				return;
 			}
-			chunks.forEach(chunk -> plugin.getFlagger().unflagChunk(chunk.getWorld().getName(), chunk.getChunkX(), chunk.getChunkZ()));
-			if (chunks.size() == region.getChunksPerRegion()) {
+			// Chunks the server was using or that changed since they were checked are left in place.
+			List<ChunkInfo> deleted = chunks.stream().filter(ChunkInfo::isOrphaned).toList();
+			deleted.forEach(chunk -> plugin.getFlagger().unflagChunk(chunk.getWorld().getName(), chunk.getChunkX(), chunk.getChunkZ()));
+			if (deleted.size() == region.getChunksPerRegion()) {
 				regionsDeleted.incrementAndGet();
 			} else {
-				chunksDeleted.addAndGet(chunks.size());
+				chunksDeleted.addAndGet((int) deleted.stream().filter(present::contains).count());
 			}
 		} catch (IOException e) {
 			plugin.debug(() -> String.format(
