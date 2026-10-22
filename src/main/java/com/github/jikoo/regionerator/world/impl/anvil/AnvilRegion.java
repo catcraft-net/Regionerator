@@ -194,6 +194,8 @@ public class AnvilRegion extends RegionInfo {
 	 * @throws IOException if an I/O error occurs
 	 */
 	private boolean writeExclusive() throws IOException {
+		boolean wholeRegion = isEveryChunkWiped();
+
 		// Leave chunks the server still has in memory or queued saves for. Their data would be
 		// written back after deletion, possibly for some data types but not others.
 		for (int i = 0; i < CHUNK_COUNT; ++i) {
@@ -213,6 +215,13 @@ public class AnvilRegion extends RegionInfo {
 		keepChangedChunks(SUBDIR_BLOCK_DATA, readBlockOffsets, readBlockTimes);
 		keepChangedChunks(SUBDIR_ENTITY_DATA, readEntityOffsets, readEntityTimes);
 
+		if (wholeRegion && !isEveryChunkWiped() && getPlugin().config().isDeleteWholeRegionsOnly()) {
+			getPlugin().debug(DebugLevel.HIGH, () -> String.format(
+					"Skipping region %s/%s - only whole regions are deleted and some chunks are in use.",
+					getWorld().getName(), getIdentifier()));
+			return false;
+		}
+
 		// May just remove this and later change method signature - is either true or an exception is thrown
 		boolean failed = false;
 
@@ -221,6 +230,15 @@ public class AnvilRegion extends RegionInfo {
 		}
 
 		return !failed;
+	}
+
+	private boolean isEveryChunkWiped() {
+		for (boolean wipe : pointerWipes) {
+			if (!wipe) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private void keepChangedChunks(@NotNull String subdirectory, int @NotNull [] readOffsets, int @NotNull [] readTimes)

@@ -196,6 +196,11 @@ public class DeletionRunnable extends BukkitRunnable {
 				.collect(Collectors.toCollection(ArrayList::new));
 
 		if (chunks.size() != region.getChunksPerRegion()) {
+			if (plugin.config().isDeleteWholeRegionsOnly()) {
+				plugin.debug(DebugLevel.HIGH, () ->
+						String.format("Skipping region - only whole regions are deleted and not all chunks are delete-eligible (%s)", chunks.size()));
+				return null;
+			}
 			plugin.debug(DebugLevel.HIGH, () ->
 					String.format("Not all chunks are delete-eligible (%s) - removing unnecessary chunks", chunks.size()));
 			// If entire region is not being deleted, filter out chunks that are already orphaned or freshly generated

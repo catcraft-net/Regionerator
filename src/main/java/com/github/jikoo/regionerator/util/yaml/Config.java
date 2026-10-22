@@ -49,6 +49,7 @@ public class Config extends ConfigYamlData {
 	private final AtomicInteger deletionChunkCount = new AtomicInteger();
 	private final AtomicBoolean rememberCycleDelay = new AtomicBoolean();
 	private final AtomicBoolean deleteFreshChunks = new AtomicBoolean();
+	private final AtomicBoolean deleteWholeRegionsOnly = new AtomicBoolean();
 	private final AtomicBoolean allowUnsafeRegionAccess = new AtomicBoolean();
 	private long cacheExpirationFrequency;
 	private long cacheRetention;
@@ -87,6 +88,7 @@ public class Config extends ConfigYamlData {
 		deletionChunkCount.set(Math.max(1, getInt("deletion.expensive-checks-between-recovery")));
 		millisBetweenCycles.set(TimeUnit.HOURS.toMillis(Math.max(0, getInt("deletion.hours-between-cycles"))));
 		rememberCycleDelay.set(getBoolean("deletion.remember-next-cycle-time"));
+		deleteWholeRegionsOnly.set(getBoolean("deletion.whole-regions-only"));
 		allowUnsafeRegionAccess.set(getBoolean("deletion.allow-unsafe-region-access"));
 
 		cacheExpirationFrequency = TimeUnit.MILLISECONDS.convert(Math.max(0, getInt("cache.minimum-expiration-frequency")), TimeUnit.SECONDS);
@@ -165,6 +167,10 @@ public class Config extends ConfigYamlData {
 
 	public boolean isRememberCycleDelay() {
 		return rememberCycleDelay.get();
+	}
+
+	public boolean isDeleteWholeRegionsOnly() {
+		return deleteWholeRegionsOnly.get();
 	}
 
 	public boolean isUnsafeRegionAccessAllowed() {
