@@ -10,6 +10,7 @@
 
 package com.github.jikoo.regionerator;
 
+import com.github.jikoo.regionerator.util.ResetAreas;
 import com.github.jikoo.regionerator.world.ChunkInfo;
 import com.github.jikoo.regionerator.world.RegionInfo;
 import com.github.jikoo.regionerator.world.WorldInfo;
@@ -22,6 +23,7 @@ import org.jetbrains.annotations.Nullable;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -212,6 +214,7 @@ public class DeletionRunnable extends BukkitRunnable {
 			}
 			plugin.debug(DebugLevel.HIGH, () ->
 					String.format("Not all chunks are delete-eligible (%s) - removing unnecessary chunks", chunks.size()));
+			keepLargeAreas(region, chunks);
 			// If entire region is not being deleted, filter out chunks that are already orphaned or freshly generated
 			chunks.removeIf(this::isPartialDeletionIgnored);
 		} else if (!plugin.config().isDeleteFreshChunks(region.getWorld())
@@ -228,6 +231,31 @@ public class DeletionRunnable extends BukkitRunnable {
 		}
 
 		return chunks;
+	}
+
+	/**
+	 * Removes eligible chunks that are not part of a large enough square of eligible chunks.
+	 *
+	 * <p>Absent and freshly generated chunks count towards a square: their terrain is already, or will be, newly
+	 * generated, so deleting old chunks next to them leaves no border between old and new terrain.
+	 */
+	private void keepLargeAreas(@NotNull RegionInfo region, @NotNull List<ChunkInfo> chunks) {
+		int size = plugin.config().getMinResetArea();
+		if (size <= 1) {
+			return;
+		}
+
+		int width = (int) Math.round(Math.sqrt(region.getChunksPerRegion()));
+		BitSet eligible = new BitSet(width * width);
+		for (ChunkInfo chunk : chunks) {
+			eligible.set(chunk.getLocalChunkZ() * width + chunk.getLocalChunkX());
+		}
+
+		BitSet covered = ResetAreas.coveredBySquares(eligible, width, size);
+		int before = chunks.size();
+		chunks.removeIf(chunk -> !covered.get(chunk.getLocalChunkZ() * width + chunk.getLocalChunkX()));
+		plugin.debug(DebugLevel.HIGH, () -> String.format("Keeping %s eligible chunks outside %sx%s areas",
+				before - chunks.size(), size, size));
 	}
 
 	private boolean isPartialDeletionIgnored(ChunkInfo chunkInfo) {

@@ -52,6 +52,7 @@ public class Config extends ConfigYamlData {
 	private final AtomicBoolean rememberCycleDelay = new AtomicBoolean();
 	private final AtomicBoolean deleteFreshChunks = new AtomicBoolean();
 	private final AtomicBoolean deleteWholeRegionsOnly = new AtomicBoolean();
+	private final AtomicInteger minResetArea = new AtomicInteger();
 	private final AtomicBoolean allowUnsafeRegionAccess = new AtomicBoolean();
 	private final AtomicBoolean pruneAfterCycle = new AtomicBoolean();
 	private final AtomicLong deletionRecordRetention = new AtomicLong();
@@ -93,6 +94,7 @@ public class Config extends ConfigYamlData {
 		millisBetweenCycles.set(TimeUnit.HOURS.toMillis(Math.max(0, getInt("deletion.hours-between-cycles"))));
 		rememberCycleDelay.set(getBoolean("deletion.remember-next-cycle-time"));
 		deleteWholeRegionsOnly.set(getBoolean("deletion.whole-regions-only"));
+		minResetArea.set(Math.max(0, Math.min(32, getInt("deletion.min-reset-area"))));
 		allowUnsafeRegionAccess.set(getBoolean("deletion.allow-unsafe-region-access"));
 		pruneAfterCycle.set(getBoolean("database.prune-after-cycle"));
 		deletionRecordRetention.set(TimeUnit.DAYS.toMillis(Math.max(0, getInt("database.keep-deletion-records-days"))));
@@ -177,6 +179,16 @@ public class Config extends ConfigYamlData {
 
 	public boolean isDeleteWholeRegionsOnly() {
 		return deleteWholeRegionsOnly.get();
+	}
+
+	/**
+	 * Gets the side length, in chunks, of the square of deletable chunks a chunk must be part of to be deleted on its
+	 * own. 1 or less deletes chunks individually.
+	 *
+	 * @return the minimum reset area's side length in chunks
+	 */
+	public int getMinResetArea() {
+		return minResetArea.get();
 	}
 
 	public boolean isUnsafeRegionAccessAllowed() {
